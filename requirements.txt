@@ -1,10 +1,6 @@
 streamlit
 google-genai
 pillow
-streamlit
-google-genai
-pillow
 pandas
 matplotlib
 ezdxf
-reportlab
