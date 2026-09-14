@@ -5,7 +5,7 @@ import io
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from matplotlib.patches import Arc, FancyArrowPatch, Rectangle, Polygon
+from matplotlib.patches import Arc, FancyArrowPatch, Rectangle, Ellipse, Polygon
 import ezdxf
 from PIL import Image
 from google import genai
@@ -92,7 +92,6 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
         "5. كراسة الكميات والبرنامج الزمني"
     ])
 
-    # اختيار النموذج
     with tab_arch:
         selected_scheme = st.selectbox(
             "اختر النموذج المعماري المطلوب عرضه:",
@@ -189,7 +188,7 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
 
         calc_total_bua = round(effective_ground * bua_factor, 2)
 
-        # ----------------- الرسم الهندسي الدقيق للمسقط الأفقي -----------------
+        # ----------------- لوحة المسقط المعماري -----------------
         fig, ax = plt.subplots(figsize=(10, 13), dpi=220)
 
         # حدود القسيمة وخط الارتداد
@@ -199,7 +198,7 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
         setback_rect = patches.Rectangle((side_sb, rear_sb), net_w, net_l, linewidth=1.8, edgecolor='#DC2626', linestyle='--', facecolor='none', label='خط الارتداد المسموح (Setback Line)')
         ax.add_patch(setback_rect)
 
-        # رسم الفراغات وصناديق النصوص
+        # رسم الفراغات المعمارية
         for r in rooms:
             room_patch = patches.Rectangle((r["x"], r["y"]), r["w"], r["h"], linewidth=2.2, edgecolor=r["ec"], facecolor=r["fc"], alpha=0.92)
             ax.add_patch(room_patch)
@@ -208,19 +207,19 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
             content = f"{r['name']}\n[{r['dim']}]"
             ax.text(r["x"] + r["w"]/2, r["y"] + r["h"]/2, content, ha='center', va='center', fontsize=9.2, weight='bold', color='#1E293B', bbox=box_props)
 
-        # رسم الأبواب (Door Swings)
+        # رسم مسار فتح الأبواب
         for d in doors:
             ax.add_patch(Arc((d["x"], d["y"]), d["r"]*2, d["r"]*2, angle=0, theta1=d["theta1"], theta2=d["theta2"], color='#0F172A', lw=1.6, ls='--'))
             ax.plot([d["x"], d["x"] + d["r"]], [d["y"], d["y"]], color='#0F172A', lw=2.2)
 
-        # رسم أسهم المداخل والمخارج
+        # رسم المداخل والمخارج
         for ap in access_points:
             arrow = FancyArrowPatch(ap["pos"], ap["target"], arrowstyle='-|>', mutation_scale=18, color=ap["c"], lw=2.4)
             ax.add_patch(arrow)
             ax.text(ap["pos"][0], ap["pos"][1] + 0.6, ap["txt"], ha='center', va='bottom', fontsize=8.5, weight='bold', color=ap["c"],
                     bbox=dict(boxstyle='round,pad=0.25', facecolor='#FFFFFF', edgecolor=ap["c"], alpha=0.95, lw=1.0))
 
-        # توضيح الشارع الرئيسي
+        # مسمى الشارع الرئيسي
         ax.annotate('الشارع الرئيسي / الواجهة المعتمدة (Main Access Road)', xy=(width/2, length), xytext=(width/2, length + 2.6),
                     ha='center', fontsize=11, weight='bold', color='#15803D',
                     bbox=dict(boxstyle='square,pad=0.4', facecolor='#DCFCE7', edgecolor='#15803D', lw=1.5))
@@ -263,50 +262,46 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
         st.info("🎨 **المفهوم التصميمي للواجهة:** طراز إماراتي معاصر (Modern Contemporary Style) يعتمد على البرج الأسطواني الزجاجي مع كتل حجرية بيضاء ورمادية، وحوائط زجاجية كورتن وول (Curtain Wall) مع مظلات ألمنيوم وشاشات خشبية (Louvers).")
 
         fig_elev, ax_e = plt.subplots(figsize=(11, 7), dpi=220)
-        ax_e.set_facecolor("#E0F2FE")  # خلفية سماء نقية
+        ax_e.set_facecolor("#E0F2FE")
 
         # أرضية الرصيف والشارع
         ax_e.fill_between([-2, net_w + 4], -1.5, 0, color='#64748B')
         ax_e.fill_between([-2, net_w + 4], -0.2, 0, color='#CBD5E1')
 
-        # كتلة المبنى الرئيسية (دور أرضي + أول بارتفاع 8.5 متر)
         h_total = 8.5
         b_w = net_w
 
-        # الكتلة الرئيسية من الحجر الأبيض ذو الحزوز الأفقية
+        # الكتلة الرئيسية من الحجر الأبيض
         ax_e.add_patch(Rectangle((0, 0), b_w, h_total, facecolor='#F8FAFC', edgecolor='#94A3B8', lw=2.0))
 
         # خطوط الحجر الصناعي الأفقي
         for y_g in np.arange(0.5, h_total, 0.6):
             ax_e.plot([0, b_w], [y_g, y_g], color='#E2E8F0', lw=0.9)
 
-        # برج الدرج الأسطواني الأيقوني الزجاجي (Curved Cylinder Tower) كما في الصورة المرفقة
+        # برج الدرج الأسطواني الزجاجي
         tower_x = b_w * 0.32
         tower_w = b_w * 0.18
         tower_h = h_total + 1.2
         ax_e.add_patch(Rectangle((tower_x, 0), tower_w, tower_h, facecolor='#E2E8F0', edgecolor='#475569', lw=2.2))
-        # زجاج البرج الدائري
         ax_e.add_patch(Rectangle((tower_x + 0.3, 1.0), tower_w - 0.6, tower_h - 1.8, facecolor='#38BDF8', edgecolor='#0F172A', lw=2.0, alpha=0.85))
-        # تقطيعات زجاج الأسطوانة
         for ty in np.arange(1.0, tower_h - 0.8, 1.2):
             ax_e.plot([tower_x + 0.3, tower_x + tower_w - 0.3], [ty, ty], color='#0F172A', lw=1.5)
 
-        # كتلة المدخل الرئيسي والباب الفاخر (Entrance Portal)
+        # بوابة المدخل الرئيسي
         ent_x = tower_x + tower_w + 0.8
         ent_w = b_w * 0.16
         ax_e.add_patch(Rectangle((ent_x - 0.2, 0), ent_w + 0.4, 4.2, facecolor='#334155', edgecolor='#0F172A', lw=1.8))
-        ax_e.add_patch(Rectangle((ent_x, 0.2), ent_w, 3.2, facecolor='#78350F', edgecolor='#451A03', lw=1.5)) # باب خشب تيك فاخر
+        ax_e.add_patch(Rectangle((ent_x, 0.2), ent_w, 3.2, facecolor='#78350F', edgecolor='#451A03', lw=1.5))
         ax_e.plot([ent_x + ent_w/2, ent_x + ent_w/2], [0.2, 3.4], color='#B45309', lw=2.0)
 
-        # نوافذ المجلس والصالات البانورامية (Double Height Curtain Wall) مع براويز رمادية داكنة
+        # نوافذ المجلس والصالات البانورامية
         w1_x = b_w * 0.05
         w1_w = b_w * 0.22
         ax_e.add_patch(Rectangle((w1_x, 1.0), w1_w, 6.0, facecolor='#38BDF8', edgecolor='#1E293B', lw=2.8, alpha=0.8))
-        # تقسيم النوافذ الطولية
         for wx in np.linspace(w1_x, w1_x + w1_w, 4):
             ax_e.plot([wx, wx], [1.0, 7.0], color='#1E293B', lw=1.5)
 
-        # واجهة الطابق الأول المعلقة والشاشات الخشبية (Louvers)
+        # واجهة الطابق الأول المعلقة واللوفرز الخشبية
         w2_x = ent_x + ent_w + 0.8
         w2_w = b_w - w2_x - 0.8
         if w2_w > 1.5:
@@ -314,13 +309,13 @@ if st.button("🚀 توليد المقترحات والمناظير الإبدا
             for ly in np.arange(1.0, 7.2, 0.5):
                 ax_e.plot([w2_x, w2_x + w2_w], [ly, ly], color='#78350F', lw=1.2, alpha=0.7)
 
-        # سترة السطح البانورامية المودرن (Parapet)
+        # سترة السطح البانورامية (Parapet)
         ax_e.add_patch(Rectangle((-0.4, h_total), b_w + 0.8, 0.6, facecolor='#1E293B', edgecolor='#0F172A', lw=2.0))
 
-        # أشجار ونباتات تجميلية خارجية
+        # معالجة النباتات التجميلية باستخدام Ellipse لتجنب خطأ Arc
         for tx in [-1.0, b_w + 1.2]:
             ax_e.add_patch(Rectangle((tx, 0), 0.3, 1.2, facecolor='#78350F'))
-            ax_e.add_patch(Arc((tx + 0.15, 2.0), 1.8, 2.5, angle=0, theta1=0, theta2=360, facecolor='#15803D', edgecolor='#166534', lw=1.5, fill=True))
+            ax_e.add_patch(Ellipse((tx + 0.15, 2.0), width=1.8, height=2.5, facecolor='#15803D', edgecolor='#166534', lw=1.5))
 
         ax_e.set_xlim(-3, b_w + 5)
         ax_e.set_ylim(-1.5, h_total + 2.5)
