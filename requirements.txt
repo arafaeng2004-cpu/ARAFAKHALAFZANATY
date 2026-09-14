@@ -6,8 +6,4 @@ matplotlib
 ezdxf
 pypdf
 streamlit
-google-genai
-pandas
-matplotlib
-pypdf
 numpy
