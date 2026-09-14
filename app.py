@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
+import io
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import ezdxf
 from PIL import Image
 from google import genai
 from google.genai import types
@@ -66,17 +70,16 @@ if st.button("🚀 تشغيل المنظومة وتوليد المخرجات ا�
     total_bua = round(effective_ground * multiplier, 2)
 
     # 2. الحسابات الإنشائية وحصر الكميات
-    est_concrete_sub = round(total_bua * 0.25, 1)    # خرسانة الأساسات والرقاب والميدات (SRC)
-    est_concrete_super = round(total_bua * 0.40, 1)  # خرسانة الأعمدة والأسقف (OPC)
+    est_concrete_sub = round(total_bua * 0.25, 1)
+    est_concrete_super = round(total_bua * 0.40, 1)
     total_concrete = round(est_concrete_sub + est_concrete_super, 1)
-    total_steel = round((total_concrete * 115) / 1000, 1)  # 115 كجم/م3 خرسانة
-    blockwork_qty = round(total_bua * 4.2)                  # عدد الطابوق التقديري (8 بوصة + 6 بوصة)
-    excavation_vol = round(effective_ground * 1.8, 1)       # حجم الحفر التقديري م3
+    total_steel = round((total_concrete * 115) / 1000, 1)
+    blockwork_qty = round(total_bua * 4.2)
+    excavation_vol = round(effective_ground * 1.8, 1)
 
-    # عرض التبويبات التفاعلية
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "1. المحددات البلدية", 
-        "2. المقترحات المعمارية", 
+        "2. المقترحات المعمارية والكروكي", 
         "3. النظام الإنشائي والمواصفات", 
         "4. حصر المواد والتكاليف (BOQ)", 
         "5. البرنامج الزمني ومراحل التنفيذ"
@@ -92,7 +95,7 @@ if st.button("🚀 تشغيل المنظومة وتوليد المخرجات ا�
         st.write(f"**الارتدادات المقررة:** أمامي {front_sb}م | خلفي {rear_sb}م | جانبي {side_sb}م")
 
     with tab2:
-        st.subheader("مقترحات استغلال الفراغات والتوجيه المعماري")
+        st.subheader("المقترحات المعمارية واستغلال الفراغات")
         arch_data = {
             "المقترح": ["النمط المركزي (L-Shape / Courtyard)", "النمط المفتوح المودرن (Open Living)", "النمط التقليدي المنفصل (Privacy Focus)"],
             "المزايا": ["أقصى خصوصية للحديقة والمسبح، إطلالة مباشرة لجميع الصالات", "تقليل الممرات، كفاءة عالية في توزيع التكييف والإنارة", "فصل تام بين مجالس الضيوف وجناح العائلة والخدمات"],
@@ -100,11 +103,94 @@ if st.button("🚀 تشغيل المنظومة وتوليد المخرجات ا�
         }
         st.table(pd.DataFrame(arch_data))
 
+        st.markdown("---")
+        st.subheader("📐 المخطط الكروكي العام للموقع (Site Layout)")
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plot_rect = patches.Rectangle((0, 0), width, length, linewidth=2.5, edgecolor='black', facecolor='#f4f4f4', label='حدود الأرض (Plot Boundary)')
+        ax.add_patch(plot_rect)
+
+        setback_rect = patches.Rectangle(
+            (side_sb, rear_sb), 
+            net_w, net_l, 
+            linewidth=1.5, edgecolor='red', linestyle='--', facecolor='none', label='حد الارتداد المسموح (Setback Limit)'
+        )
+        ax.add_patch(setback_rect)
+
+        buildable_l = min(net_l, effective_ground / net_w if net_w > 0 else net_l)
+        building_rect = patches.Rectangle(
+            (side_sb, rear_sb), 
+            net_w, buildable_l, 
+            linewidth=2, edgecolor='#1E3A8A', facecolor='#93C5FD', alpha=0.6, label='كتلة المبنى المقترحة (Building Footprint)'
+        )
+        ax.add_patch(building_rect)
+
+        ax.set_xlim(-5, width + 5)
+        ax.set_ylim(-5, length + 8)
+        ax.set_aspect('equal')
+        ax.set_xlabel("العرض (متر)", fontsize=10)
+        ax.set_ylabel("العمق (متر)", fontsize=10)
+        ax.set_title(f"مخطط الموقع العام المبدئي - مساحة البناء: {effective_ground:.1f} م²", fontsize=12)
+        ax.legend(loc='upper right', fontsize=8)
+        ax.grid(True, linestyle=':', alpha=0.6)
+
+        ax.annotate('الشارع الرئيسي / الواجهة', xy=(width/2, length + 1), xytext=(width/2, length + 4),
+                    ha='center', fontsize=10, weight='bold', color='darkgreen',
+                    arrowprops=dict(arrowstyle="->", color='darkgreen', lw=1.5))
+
+        st.pyplot(fig)
+
+        # أزرار التصدير
+        c_dxf, c_pdf = st.columns(2)
+        with c_dxf:
+            try:
+                doc = ezdxf.new('R2010')
+                msp = doc.modelspace()
+                doc.layers.add(name="PLOT_LIMITS", color=7)
+                msp.add_lwpolyline([(0, 0), (width, 0), (width, length), (0, length), (0, 0)], dxfattribs={'layer': 'PLOT_LIMITS'})
+                doc.layers.add(name="SETBACKS", color=1)
+                msp.add_lwpolyline([
+                    (side_sb, rear_sb), 
+                    (width - side_sb, rear_sb), 
+                    (width - side_sb, length - front_sb), 
+                    (side_sb, length - front_sb), 
+                    (side_sb, rear_sb)
+                ], dxfattribs={'layer': 'SETBACKS'})
+                doc.layers.add(name="BUILDING_FOOTPRINT", color=4)
+                msp.add_lwpolyline([
+                    (side_sb, rear_sb), 
+                    (side_sb + net_w, rear_sb), 
+                    (side_sb + net_w, rear_sb + buildable_l), 
+                    (side_sb, rear_sb + buildable_l), 
+                    (side_sb, rear_sb)
+                ], dxfattribs={'layer': 'BUILDING_FOOTPRINT'})
+
+                dxf_stream = io.StringIO()
+                doc.write(dxf_stream)
+                st.download_button(
+                    label="💾 تحميل المخطط بصيغة AutoCAD (.DXF)",
+                    data=dxf_stream.getvalue().encode('utf-8'),
+                    file_name=f"Plot_{width}x{length}_SitePlan.dxf",
+                    mime="application/dxf"
+                )
+            except Exception as e:
+                st.error(f"خطأ في توليد ملف DXF: {e}")
+
+        with c_pdf:
+            img_buf = io.BytesIO()
+            fig.savefig(img_buf, format='png', dpi=300, bbox_inches='tight')
+            img_buf.seek(0)
+            st.download_button(
+                label="📄 تحميل الكروكي كصورة هندسية عالية الدقة",
+                data=img_buf,
+                file_name=f"Plot_{width}x{length}_SitePlan.png",
+                mime="image/png"
+            )
+
     with tab3:
         st.subheader("التوصيات الهندسية والإنشائية المبدئية")
         found_decision = "قواعد منفصلة + ميدات ربط متصلة (Isolated Footings + Tie Beams)" if actual_sbc >= 150 else "أساس حصيري مسلح (Raft Foundation)"
         st.info(f"**نظام التأسيس المقترح بناءً على جهد تربة ({actual_sbc} kN/m²):** {found_decision}")
-        
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             st.markdown("**مواصفات الخرسانة المعتمدة:**")
@@ -147,4 +233,3 @@ if st.button("🚀 تشغيل المنظومة وتوليد المخرجات ا�
             ]
         }
         st.table(pd.DataFrame(schedule_data))
-        
