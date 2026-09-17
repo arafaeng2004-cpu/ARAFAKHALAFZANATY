@@ -508,3 +508,485 @@ with tabs[4]:
 
             st.markdown(reply)
             st.session_state.chat_history.append({"role": "assistant", "content": reply})
+import streamlit as st
+import pandas as pd
+import json
+import io
+import datetime
+import hashlib
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.patches import Arc, FancyArrowPatch, Rectangle, Circle, Polygon
+import matplotlib.dates as mdates
+import ezdxf
+from PIL import Image
+import pypdf
+from google import genai
+from google.genai import types
+
+st.set_page_config(
+    page_title="UAE Municipal & Engineering Comprehensive Suite",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# جلب المفتاح السحابي المشفر
+secret_key = st.secrets.get("GEMINI_API_KEY", "")
+
+if "auth" not in st.session_state:
+    st.session_state.auth = {"logged_in": False, "user": "Admin"}
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# التحقق السريع للإدارة
+if "admin_key" in st.query_params and st.query_params["admin_key"] == "arafa_master_2026":
+    st.session_state.auth = {"logged_in": True, "user": "Super Admin"}
+
+if not st.session_state.auth["logged_in"]:
+    st.title("🔒 المنظومة الهندسية الاستشارية المعتمدة - مشاريع الإمارات")
+    c_l1, c_l2 = st.columns(2)
+    with c_l1:
+        u = st.text_input("اسم المستخدم:")
+        p = st.text_input("كلمة المرور:", type="password")
+        if st.button("دخول المنظومة"):
+            if u == "admin" and p == "admin@2026":
+                st.session_state.auth = {"logged_in": True, "user": "Super Admin"}
+                st.rerun()
+            else:
+                st.error("بيانات الدخول غير صحيحة.")
+    with c_l2:
+        st.info("المنصة الاستشارية الموحدة للمخططات المعمارية والإنشائية التنفيذية وكراسات كميات قروض الإسكان المعتمدة.")
+    st.stop()
+
+# ----------------- الشريط الجانبي -----------------
+st.sidebar.markdown(f"**👤 المشترك النشط:** `{st.session_state.auth['user']}`")
+c_sb1, c_sb2 = st.sidebar.columns(2)
+with c_sb1:
+    if st.button("🔄 تصفير وبدء مشروع"):
+        st.session_state.chat_history = []
+        st.rerun()
+with c_sb2:
+    if st.button("🚪 خروج"):
+        st.session_state.auth["logged_in"] = False
+        st.rerun()
+
+st.sidebar.markdown("---")
+emirate = st.sidebar.selectbox(
+    "الإمارة / الكود التنظيمي:",
+    ["أبوظبي / العين (ADIBC)", "الشارقة (المناطق الحضرية والشرقية)", "دبي (Dubai Building Code)", "عجمان / الفجيرة"]
+)
+
+# محددات البناء البلدية
+if "أبوظبي" in emirate:
+    front_sb, rear_sb, side_sb, max_cov, roof_cov = 5.0, 3.0, 2.0, 0.50, 0.35
+elif "الشارقة" in emirate:
+    front_sb, rear_sb, side_sb, max_cov = 4.5, 3.0, 1.5, 0.55, 0.40
+elif "دبي" in emirate:
+    front_sb, rear_sb, side_sb, max_cov = 4.0, 3.0, 1.5, 0.50, 0.35
+else:
+    front_sb, rear_sb, side_sb, max_cov = 4.0, 3.0, 1.5, 0.55, 0.40
+
+override_key = st.sidebar.text_input("مفتاح Gemini API (لتحديث المفتاح إذا ظهر خطأ):", type="password")
+active_api_key = override_key if override_key else secret_key
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📐 أبعاد القسيمة المعتمدة")
+source_mode = st.sidebar.radio("مصدر الأبعاد:", ["إدخال الأبعاد يدوياً", "قراءة كروكي الأرض (PDF / صورة)"])
+
+plot_w = st.session_state.get("plot_w", 30.0)
+plot_l = st.session_state.get("plot_l", 50.0)
+actual_sbc = 150.0
+
+if source_mode == "قراءة كروكي الأرض (PDF / صورة)":
+    uploaded_krooki = st.sidebar.file_uploader("رفع الكروكي الصادر من البلدية:", type=["pdf", "png", "jpg", "jpeg"])
+    if uploaded_krooki and active_api_key:
+        client = genai.Client(api_key=active_api_key)
+        f_bytes = uploaded_krooki.read()
+        m_type = "application/pdf" if uploaded_krooki.name.lower().endswith(".pdf") else uploaded_krooki.type
+        with st.sidebar.status("جاري قراءة أبعاد الكروكي عبر Gemini 2.5 Pro..."):
+            try:
+                p_text = "You are an expert UAE civil engineering AI. Extract municipal data strictly from the provided document. If a value is missing, return null. Output strictly in JSON format: {'width': float, 'length': float}."
+                res = client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=[types.Part.from_bytes(data=f_bytes, mime_type=m_type), p_text],
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                dims = json.loads(res.text)
+                plot_w = float(dims.get("width", 30.0))
+                plot_l = float(dims.get("length", 50.0))
+                st.session_state.plot_w = plot_w
+                st.session_state.plot_l = plot_l
+                st.sidebar.success(f"الواجهة: {plot_w}م | العمق: {plot_l}م")
+            except Exception as e:
+                st.sidebar.error(f"خطأ: {e}")
+else:
+    plot_w = st.sidebar.number_input("عرض واجهة القسيمة على الشارع (م):", 14.0, 250.0, float(plot_w), 0.5)
+    plot_l = st.sidebar.number_input("عمق القسيمة الداخلي (م):", 16.0, 350.0, float(plot_l), 0.5)
+    actual_sbc = st.sidebar.number_input("جهد التربة الصافي SBC (kN/m²):", 60.0, 450.0, 150.0, 10.0)
+    st.session_state.plot_w = plot_w
+    st.session_state.plot_l = plot_l
+
+# الحسابات الهندسية
+plot_area = round(plot_w * plot_l, 2)
+net_w = max(0.0, plot_w - (2 * side_sb))
+net_l = max(0.0, plot_l - (front_sb + rear_sb))
+max_ground = round(plot_area * max_cov, 2)
+effective_ground = min(round(net_w * net_l, 2), max_ground)
+buildable_l = min(net_l, effective_ground / net_w if net_w > 0 else net_l)
+first_floor_area = round(effective_ground * 0.90, 1)
+roof_floor_area = round(effective_ground * roof_cov, 1)
+total_bua = round(effective_ground + first_floor_area + roof_floor_area, 1)
+
+# ----------------- الواجهة الرئيسية والتبويبات -----------------
+st.title("🏛️ المنظومة الهندسية الاستشارية التنفيذية الشاملة")
+st.caption(f"المرجعية: الكود الإماراتي ({emirate}) | معايير قروض الإسكان ومخططات ARCAL الاستشارية المعتمدة | مساحة القسيمة: {plot_area} م² | إجمالي البناء: {total_bua} م²")
+
+tabs = st.tabs([
+    "1. المساقط المعمارية (أرضي + أول + روف)",
+    "2. المخطط الإنشائي وخطوط أبعاد المحاور",
+    "3. كراسة الكميات التعاقدية الرسمية (BOQ)",
+    "4. المنظور المعماري الحجمي ثلاثي الأبعاد",
+    "5. المستشار الهندسي الذكي (AI Copilot)"
+])
+
+# ==============================================================================
+# TAB 1: المساقط المعمارية التنفيذية (ARCAL Consulting Standard)
+# ==============================================================================
+with tabs[0]:
+    st.subheader("المساقط المعمارية التنفيذية المعتمدة بالممرات والبهو والدرج الوظيفي")
+
+    col_f1, col_f2, col_f3 = st.columns(3)
+
+    # 1. الأرضي
+    with col_f1:
+        st.markdown("##### 📐 الطابق الأرضي (Ground Floor Plan)")
+        fig_g, ax_g = plt.subplots(figsize=(8, 12), dpi=180)
+        ax_g.set_facecolor('#FFFFFF')
+
+        ax_g.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
+        ax_g.add_patch(Rectangle((side_sb, rear_sb), net_w, net_l, lw=1.5, edgecolor='#DC2626', linestyle='--', facecolor='none'))
+
+        # بهو وممر التوزيع الرئيسي (Corridor & Foyer)
+        corridor_w = 2.4
+        corridor_x = side_sb + net_w*0.48 - corridor_w/2
+        ax_g.add_patch(Rectangle((corridor_x, rear_sb), corridor_w, buildable_l, facecolor='#F1F5F9', edgecolor='#94A3B8', lw=1.0))
+        ax_g.text(corridor_x + corridor_w/2, rear_sb + buildable_l*0.5, "بهو وممر توزيع رئيسي\nMain Corridor (W=2.40m)", ha='center', va='center', fontsize=7.5, weight='bold', color='#475569', rotation=90)
+
+        # الغرف وفق مخططات ARCAL
+        rooms_g = [
+            {"n": "مجلس رجال رسمي\nFormal Majlis\n(7.50 x 5.40m)", "x": side_sb, "y": rear_sb + buildable_l*0.60, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.40, "c": "#FEF3C7"},
+            {"n": "صالة طعام رسمية\nDining Hall\n(5.40 x 5.40m)", "x": side_sb, "y": rear_sb + buildable_l*0.30, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.30, "c": "#FDE68A"},
+            {"n": "مطبخ تحضيري ورئيسي\nKitchen Suite\n(4.50 x 5.00m)", "x": side_sb, "y": rear_sb, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.30, "c": "#FED7AA"},
+            {"n": "صالة معيشة عائلية بانورامية\nLiving Family Hall\n(7.00 x 8.50m)", "x": corridor_x + corridor_w, "y": rear_sb + buildable_l*0.45, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.55, "c": "#E0F2FE"},
+            {"n": "جناح نوم الضيوف / كبار السن\nGuest Suite (4.80 x 3.80m)", "x": corridor_x + corridor_w, "y": rear_sb, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.45, "c": "#F3E8FF"}
+        ]
+
+        for r in rooms_g:
+            ax_g.add_patch(Rectangle((r["x"], r["y"]), r["w"], r["h"], lw=2.0, edgecolor='#0F172A', facecolor=r["c"], alpha=0.9))
+            ax_g.text(r["x"] + r["w"]/2, r["y"] + r["h"]/2, r["n"], ha='center', va='center', fontsize=7.5, weight='bold', color='#0F172A',
+                      bbox=dict(boxstyle='round,pad=0.2', facecolor='#FFFFFF', edgecolor='#64748B', alpha=0.9, lw=0.8))
+
+        # بيت الدرج المعتمد (26 درجة - قائمة 16.92 سم نائمة 30 سم)
+        st_x = corridor_x - 0.4
+        st_y = rear_sb + buildable_l*0.38
+        st_w, st_h = 3.2, 4.0
+        ax_g.add_patch(Rectangle((st_x, st_y), st_w, st_h, facecolor='#E2E8F0', edgecolor='#0F172A', lw=2.0))
+        for sy in np.linspace(st_y, st_y + st_h, 13):
+            ax_g.plot([st_x, st_x + st_w], [sy, sy], color='#475569', lw=1.2)
+        ax_g.annotate('صعود UP (26 Nos)', xy=(st_x + st_w/2, st_y + st_h - 0.3), xytext=(st_x + st_w/2, st_y + 0.4),
+                      ha='center', fontsize=8.0, weight='bold', color='#1E3A8A', arrowprops=dict(arrowstyle="->", color='#1E3A8A', lw=2.0))
+
+        # الأبواب وتفريغات الفتح
+        for dx, dy, dr, a1, a2 in [
+            (side_sb + net_w*0.22, rear_sb + buildable_l, 1.2, 180, 270),
+            (corridor_x + corridor_w/2, rear_sb + buildable_l, 1.4, 270, 360),
+            (corridor_x, rear_sb + buildable_l*0.75, 1.0, 90, 180),
+            (corridor_x + corridor_w, rear_sb + buildable_l*0.25, 1.0, 0, 90)
+        ]:
+            ax_g.add_patch(Arc((dx, dy), dr*2, dr*2, angle=0, theta1=a1, theta2=a2, color='#0F172A', lw=1.8, ls='--'))
+            ax_g.plot([dx, dx + dr], [dy, dy], color='#0F172A', lw=2.0)
+
+        ax_g.set_xlim(-plot_w * 0.08, plot_w * 1.08)
+        ax_g.set_ylim(-plot_l * 0.06, plot_l * 1.12)
+        ax_g.set_aspect('equal')
+        ax_g.axis('off')
+        ax_g.set_title(f"الطابق الأرضي (GF: {effective_ground:.1f} م²)", fontsize=10, weight='bold')
+        st.pyplot(fig_g)
+
+    # 2. الأول
+    with col_f2:
+        st.markdown("##### 📐 الطابق الأول (First Floor Plan)")
+        fig_f, ax_f = plt.subplots(figsize=(8, 12), dpi=180)
+        ax_f.set_facecolor('#FFFFFF')
+
+        ax_f.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
+        ax_f.add_patch(Rectangle((side_sb, rear_sb), net_w, net_l, lw=1.5, edgecolor='#DC2626', linestyle='--', facecolor='none'))
+        ax_f.add_patch(Rectangle((corridor_x, rear_sb), corridor_w, buildable_l, facecolor='#F1F5F9', edgecolor='#94A3B8', lw=1.0))
+
+        rooms_f = [
+            {"n": "جناح النوم الرئيسي الملكي\nMaster Bedroom Suite\n(6.50 x 5.40m)", "x": side_sb, "y": rear_sb + buildable_l*0.55, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.45, "c": "#EDE9FE"},
+            {"n": "دريسنج وحمام جاكوزي\nDressing & Ensuite\n(4.50 x 5.00m)", "x": side_sb, "y": rear_sb + buildable_l*0.25, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.30, "c": "#DDD6FE"},
+            {"n": "جناح نوم الأبناء 1\nBedroom Suite 1\n(4.50 x 5.00m)", "x": side_sb, "y": rear_sb, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.25, "c": "#CCFBF1"},
+            {"n": "صالة معيشة علوية + بوفيه\nLiving & Pantry\n(5.00 x 6.00m)", "x": corridor_x + corridor_w, "y": rear_sb + buildable_l*0.50, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.50, "c": "#E0F2FE"},
+            {"n": "جناح نوم الأبناء 2 + 3\nBedroom Suites 2 & 3\n(5.00 x 7.00m)", "x": corridor_x + corridor_w, "y": rear_sb, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.50, "c": "#FEF3C7"}
+        ]
+
+        for r in rooms_f:
+            ax_f.add_patch(Rectangle((r["x"], r["y"]), r["w"], r["h"], lw=2.0, edgecolor='#0F172A', facecolor=r["c"], alpha=0.9))
+            ax_f.text(r["x"] + r["w"]/2, r["y"] + r["h"]/2, r["n"], ha='center', va='center', fontsize=7.5, weight='bold', color='#0F172A',
+                      bbox=dict(boxstyle='round,pad=0.2', facecolor='#FFFFFF', edgecolor='#64748B', alpha=0.9, lw=0.8))
+
+        # بيت الدرج بالأول
+        ax_f.add_patch(Rectangle((st_x, st_y), st_w, st_h, facecolor='#FEF08A', edgecolor='#0F172A', lw=2.0))
+        for sy in np.linspace(st_y, st_y + st_h, 13):
+            ax_f.plot([st_x, st_x + st_w], [sy, sy], color='#B45309', lw=1.2, linestyle='--')
+        ax_f.annotate('هبوط DN\n(Void Open)', xy=(st_x + st_w/2, st_y + 0.4), xytext=(st_x + st_w/2, st_y + st_h - 0.4),
+                      ha='center', fontsize=8.0, weight='bold', color='#B45309', arrowprops=dict(arrowstyle="->", color='#B45309', lw=2.0))
+
+        ax_f.set_xlim(-plot_w * 0.08, plot_w * 1.08)
+        ax_f.set_ylim(-plot_l * 0.06, plot_l * 1.12)
+        ax_f.set_aspect('equal')
+        ax_f.axis('off')
+        ax_f.set_title(f"الطابق الأول (FF: {first_floor_area:.1f} م²)", fontsize=10, weight='bold')
+        st.pyplot(fig_f)
+
+    # 3. طابق الروف والسطح
+    with col_f3:
+        st.markdown(f"##### 📐 طابق الروف والسطح (Roof Floor: {int(roof_cov*100)}%)")
+        fig_r, ax_r = plt.subplots(figsize=(8, 12), dpi=180)
+        ax_r.set_facecolor('#FFFFFF')
+
+        ax_r.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
+        ax_r.add_patch(Rectangle((side_sb, rear_sb), net_w, buildable_l, lw=2.0, edgecolor='#64748B', facecolor='#F1F5F9'))
+        ax_r.text(side_sb + net_w*0.5, rear_sb + buildable_l*0.88, "سطح مبلط (Roof Terrace)", ha='center', fontsize=8.5, weight='bold', color='#475569')
+
+        rf_w, rf_l = net_w * 0.60, buildable_l * 0.45
+        rf_x, rf_y = side_sb + net_w*0.20, rear_sb + buildable_l*0.25
+
+        ax_r.add_patch(Rectangle((rf_x, rf_y), rf_w, rf_l, lw=2.5, edgecolor='#0F172A', facecolor='#FEF3C7'))
+        ax_r.plot([rf_x, rf_x + rf_w], [rf_y + rf_l*0.5, rf_y + rf_l*0.5], color='#0F172A', lw=1.8)
+        ax_r.text(rf_x + rf_w/2, rf_y + rf_l*0.75, "صالة رياضة وترفيه / Roof Gym\n(5.0 x 6.5m)", ha='center', va='center', fontsize=8, weight='bold')
+        ax_r.plot([rf_x + rf_w*0.5, rf_x + rf_w*0.5], [rf_y, rf_y + rf_l*0.5], color='#0F172A', lw=1.8)
+        ax_r.text(rf_x + rf_w*0.25, rf_y + rf_l*0.25, "غسيل\nLaundry", ha='center', va='center', fontsize=7.5, weight='bold')
+        ax_r.text(rf_x + rf_w*0.75, rf_y + rf_l*0.25, "خادمة + حمام\nMaid's Room", ha='center', va='center', fontsize=7.5, weight='bold')
+
+        ax_r.add_patch(Rectangle((st_x, st_y), st_w, 2.4, facecolor='#CBD5E1', edgecolor='#0F172A', lw=2.0))
+        ax_r.text(st_x + st_w/2, st_y + 1.2, "بيت الدرج والمصعد\nStair & Lift Core", ha='center', va='center', fontsize=8, weight='bold')
+
+        ax_r.set_xlim(-plot_w * 0.08, plot_w * 1.08)
+        ax_r.set_ylim(-plot_l * 0.06, plot_l * 1.12)
+        ax_r.set_aspect('equal')
+        ax_r.axis('off')
+        ax_r.set_title(f"طابق الروف (Roof: {roof_floor_area:.1f} م²)", fontsize=10, weight='bold')
+        st.pyplot(fig_r)
+
+# ==============================================================================
+# TAB 2: المخطط الإنشائي وأبعاد المحاور
+# ==============================================================================
+with tabs[1]:
+    st.subheader("🏗️ المخطط الإنشائي التنفيذي وخطوط الأبعاد بين المحاور (Grid Dimensions)")
+
+    col_load_u = 1350.0
+    footing_a = (col_load_u / 1.45) / actual_sbc
+    footing_d = np.sqrt(footing_a)
+    footing_th = max(0.50, round(footing_d * 0.25, 2))
+
+    gx_coords = [side_sb, side_sb + net_w*0.35, side_sb + net_w*0.70, side_sb + net_w]
+    gy_coords = [rear_sb, rear_sb + buildable_l*0.35, rear_sb + buildable_l*0.70, rear_sb + buildable_l]
+    x_tags, y_tags = ["1", "2", "3", "4"], ["A", "B", "C", "D"]
+
+    fig_str, ax_s = plt.subplots(figsize=(10, 13), dpi=180)
+    ax_s.set_facecolor('#FFFFFF')
+
+    # رسم المحاور
+    for idx, gx in enumerate(gx_coords):
+        ax_s.plot([gx, gx], [rear_sb - 2.5, rear_sb + buildable_l + 3.0], color='#DC2626', linestyle='-.', lw=1.2)
+        ax_s.text(gx, rear_sb + buildable_l + 3.8, x_tags[idx], ha='center', fontsize=10, weight='bold', bbox=dict(boxstyle='circle', facecolor='#FEE2E2', edgecolor='#DC2626'))
+    for idx, gy in enumerate(gy_coords):
+        ax_s.plot([side_sb - 2.5, side_sb + net_w + 3.0], [gy, gy], color='#DC2626', linestyle='-.', lw=1.2)
+        ax_s.text(side_sb - 3.4, gy, y_tags[idx], ha='center', fontsize=10, weight='bold', bbox=dict(boxstyle='circle', facecolor='#FEE2E2', edgecolor='#DC2626'))
+
+    # الميدات
+    for gx in gx_coords:
+        ax_s.plot([gx, gx], [rear_sb, rear_sb + buildable_l], color='#475569', lw=3.0)
+    for gy in gy_coords:
+        ax_s.plot([side_sb, side_sb + net_w], [gy, gy], color='#475569', lw=3.0)
+
+    # القواعد والأعمدة
+    for gx in gx_coords:
+        for gy in gy_coords:
+            ax_s.add_patch(Rectangle((gx - footing_d/2, gy - footing_d/2), footing_d, footing_d, facecolor='#E2E8F0', edgecolor='#1E293B', lw=1.5))
+            ax_s.add_patch(Rectangle((gx - 0.10, gy - 0.30), 0.20, 0.60, facecolor='#0F172A', edgecolor='black', lw=1.2))
+
+    # الأبعاد بين المحاور الأفقية
+    dim_y_pos = rear_sb + buildable_l + 1.6
+    for i in range(len(gx_coords) - 1):
+        x1, x2 = gx_coords[i], gx_coords[i+1]
+        dist = x2 - x1
+        ax_s.annotate('', xy=(x1, dim_y_pos), xytext=(x2, dim_y_pos), arrowprops=dict(arrowstyle='<->', color='black', lw=1.2))
+        ax_s.text((x1 + x2)/2, dim_y_pos + 0.4, f"{dist:.2f} m", ha='center', va='bottom', fontsize=8.5, weight='bold', color='black')
+
+    ax_s.annotate('', xy=(gx_coords[0], dim_y_pos + 1.2), xytext=(gx_coords[-1], dim_y_pos + 1.2), arrowprops=dict(arrowstyle='<->', color='#1E3A8A', lw=1.5))
+    ax_s.text((gx_coords[0] + gx_coords[-1])/2, dim_y_pos + 1.5, f"Total = {net_w:.2f} m", ha='center', va='bottom', fontsize=9.0, weight='bold', color='#1E3A8A')
+
+    # الأبعاد بين المحاور الرأسية
+    dim_x_pos = side_sb + net_w + 1.6
+    for j in range(len(gy_coords) - 1):
+        y1, y2 = gy_coords[j], gy_coords[j+1]
+        dist_y = y2 - y1
+        ax_s.annotate('', xy=(dim_x_pos, y1), xytext=(dim_x_pos, y2), arrowprops=dict(arrowstyle='<->', color='black', lw=1.2))
+        ax_s.text(dim_x_pos + 0.4, (y1 + y2)/2, f"{dist_y:.2f} m", ha='left', va='center', fontsize=8.5, weight='bold', color='black', rotation=90)
+
+    ax_s.annotate('', xy=(dim_x_pos + 1.2, gy_coords[0]), xytext=(dim_x_pos + 1.2, gy_coords[-1]), arrowprops=dict(arrowstyle='<->', color='#1E3A8A', lw=1.5))
+    ax_s.text(dim_x_pos + 1.6, (gy_coords[0] + gy_coords[-1])/2, f"Total = {buildable_l:.2f} m", ha='left', va='center', fontsize=9.0, weight='bold', color='#1E3A8A', rotation=90)
+
+    ax_s.set_xlim(side_sb - 5, side_sb + net_w + 5)
+    ax_s.set_ylim(rear_sb - 4, rear_sb + buildable_l + 6)
+    ax_s.set_aspect('equal')
+    ax_s.axis('off')
+    ax_s.set_title("المخطط الإنشائي التنفيذي: المحاور والأبعاد والقواعد والميدات والأعمدة", fontsize=11, weight='bold')
+    st.pyplot(fig_str)
+
+# ==============================================================================
+# TAB 3: كراسة الكميات الرسمية المعتمدة (Royal Dome BOQ Standard)
+# ==============================================================================
+with tabs[2]:
+    st.subheader("📊 كراسة الكميات والمواصفات المعتمدة لمشاريع قروض الإسكان بالدولة")
+
+    col_q1, col_q2 = st.columns(2)
+    with col_q1:
+        finishing_tier = st.selectbox(
+            "اختر مستوى التشطيب والمواصفات التعاقدية:",
+            [
+                "1. تشطيب تجاري معتمد (National Housing Standard) - قروض الإسكان",
+                "2. ديلوكس عصري حديث (Modern Deluxe) - بورسلان إسباني وألمنيوم حراري",
+                "3. سوبر ديلوكس فندقي (Super Deluxe) - رخام طبيعي وتكييف Inverter",
+                "4. ألترا لوكجري VIP (Ultra Luxury VIP) - رخام كامل وSmart Home"
+            ]
+        )
+    with col_q2:
+        calc_bua = st.number_input("مسطح البناء الإجمالي BUA المعتمد للحساب (م²):", 100.0, 30000.0, float(total_bua), 25.0)
+
+    r_factor = 1.0 if "تجاري" in finishing_tier else (1.35 if "ديلوكس" in finishing_tier else (1.75 if "سوبر" in finishing_tier else 2.40))
+
+    # بنود كراسة الكميات الحقيقية لمكتب رويال دوم
+    boq_real = [
+        {"البند": "1.1", "القسم": "الأعمال التحضيرية", "الوصف": "السور المؤقت واللوحات الخارجية ومكاتب الإشراف وتوصيل الخدمات", "الوحدة": "مقطوع", "الكمية": 1, "السعر (AED)": 48500.0},
+        {"البند": "1.2", "القسم": "الأعمال التحضيرية", "الوصف": "اختبارات فحص التربة واختبار المواد ورش النمل الأبيض", "الوحدة": "مقطوع", "الكمية": 1, "السعر (AED)": 12000.0},
+        {"البند": "2.1", "القسم": "الحفر والخرسانة", "الوصف": "حفر لزوم الأساسات وردم أسفل منسوب أرضية الطابق الأرضي", "الوحدة": "م³", "الكمية": round(calc_bua * 1.6, 1), "السعر (AED)": 10.0},
+        {"البند": "2.2", "القسم": "الحفر والخرسانة", "الوصف": "خرسانة عادية Blinding أسفل القواعد والجسور الأرضية", "الوحدة": "م³", "الكمية": round(calc_bua * 0.05, 1), "السعر (AED)": 550.0},
+        {"البند": "2.3", "القسم": "الحفر والخرسانة", "الوصف": "خرسانة مسلحة كبريتية SRC للقواعد والجسور الأرضية وأرضية الأرضي", "الوحدة": "م³", "الكمية": round(calc_bua * 0.28, 1), "السعر (AED)": 1200.0},
+        {"البند": "3.1", "القسم": "الهيكل العلوي", "الوصف": "خرسانة مسلحة لزوم الأعمدة والكمرات للفيلا", "الوحدة": "م³", "الكمية": round(calc_bua * 0.15, 1), "السعر (AED)": 1300.0},
+        {"البند": "3.2", "القسم": "الهيكل العلوي", "الوصف": "خرسانة مسلحة لزوم أسقف الأرضي والأول والروف والدرج الداخلي", "الوحدة": "م³", "الكمية": round(calc_bua * 0.35, 1), "السعر (AED)": 1250.0},
+        {"البند": "4.1", "القسم": "أعمال الطابوق", "الوصف": "طابوق عازل خارجي 20 سم ومصمت أسفل الميدات ومفرغ للداخل", "الوحدة": "م²", "الكمية": round(calc_bua * 2.2, 1), "السعر (AED)": 110.0},
+        {"البند": "5.1", "القسم": "أعمال العزل", "الوصف": "عزل الأساسات بيتومين وعزل الحمامات رابرايز سائل", "الوحدة": "م²", "الكمية": round(calc_bua * 0.6, 1), "السعر (AED)": 35.0},
+        {"البند": "5.2", "القسم": "أعمال العزل", "الوصف": "عزل الأسطح حرارياً ومائياً بنظام الكومبو فوم 7 سم F5 مع الضمان", "الوحدة": "م²", "الكمية": round(calc_bua * 0.45, 1), "السعر (AED)": 120.0},
+        {"البند": "6.1", "القسم": "التشطيبات الداخلية", "الوصف": "طبقة سكريد 7 سم وتوريد وتركيب بورسلان أرضيات F1 ورخام المجالس F3", "الوحدة": "م²", "الكمية": round(calc_bua * 1.1, 1), "السعر (AED)": round(75.0 * r_factor, 1)},
+        {"البند": "6.2", "القسم": "التشطيبات الداخلية", "الوصف": "توريد وتركيب رخام الدرج الداخلي والخارجي F4 قائمة ونائمة 3 سم", "الوحدة": "م.ط", "الكمية": 96, "السعر (AED)": round(200.0 * r_factor, 1)},
+        {"البند": "6.3", "القسم": "التشطيبات الداخلية", "الوصف": "بياض أسمنتي (بلاستر) ودهان فينوماستيك جوتن قابل للغسيل W1", "الوحدة": "م²", "الكمية": round(calc_bua * 4.5, 1), "السعر (AED)": round(25.0 * r_factor, 1)},
+        {"البند": "6.4", "القسم": "الأسقف والديكور", "الوصف": "أسقف جبسوم بورد 12.5 مم للصالات والمجالس C4 وأسقف ألمنيوم للحمامات", "الوحدة": "م²", "الكمية": round(calc_bua * 0.8, 1), "السعر (AED)": round(110.0 * r_factor, 1)}
+    ]
+
+    df_b = pd.DataFrame(boq_real)
+    df_b["الإجمالي (AED)"] = round(df_b["الكمية"] * df_b["السعر (AED)"])
+    grand_cost = df_b["الإجمالي (AED)"].sum()
+    cost_per_m2 = grand_cost / calc_bua
+    cost_per_sqft = cost_per_m2 / 10.764
+
+    st.markdown("---")
+    cm1, cm2, cm3 = st.columns(3)
+    cm1.metric("التكلفة الإجمالية التقديرية (عظم + تشطيب)", f"{grand_cost:,.0f} درهم إماراتي")
+    cm2.metric("متوسط سعر المتر المربع (BUA)", f"{cost_per_m2:,.1f} AED / m²")
+    cm3.metric("متوسط سعر القدم المربع", f"{cost_per_sqft:,.1f} AED / sq.ft")
+
+    st.dataframe(df_b, use_container_width=True)
+
+    csv_buf = io.StringIO()
+    df_b.to_csv(csv_buf, index=False, encoding='utf-8-sig')
+    st.download_button("📥 تحميل كراسة الكميات المسعرة الرسمية (Excel / CSV)", csv_buf.getvalue().encode('utf-8-sig'), "BOQ_RoyalDome_Standard.csv", "text/csv")
+
+# ==============================================================================
+# TAB 4: المنظور ثلاثي الأبعاد
+# ==============================================================================
+with tabs[3]:
+    st.subheader("🏛️ المنظور المعماري الحجمي (3D Axonometric Perspective)")
+
+    fig_3d, ax_3d = plt.subplots(figsize=(11, 7.5), dpi=200)
+    ax_3d.set_facecolor('#F0F9FF')
+
+    cos30, sin30 = np.cos(np.radians(30)), np.sin(np.radians(30))
+    def iso(x, y, z):
+        return (x - y) * cos30, (x + y) * sin30 + z
+
+    p_ground = [iso(-2, -2, 0), iso(22, -2, 0), iso(22, 20, 0), iso(-2, 20, 0)]
+    ax_3d.add_patch(Polygon(p_ground, facecolor='#E2E8F0', edgecolor='#94A3B8', lw=1.5))
+
+    bx, by, bz1 = 15, 12, 4.0
+    ax_3d.add_patch(Polygon([iso(0, 0, 0), iso(bx, 0, 0), iso(bx, 0, bz1), iso(0, 0, bz1)], facecolor='#F8FAFC', edgecolor='#334155', lw=1.8))
+    ax_3d.add_patch(Polygon([iso(bx, 0, 0), iso(bx, by, 0), iso(bx, by, bz1), iso(bx, 0, bz1)], facecolor='#CBD5E1', edgecolor='#334155', lw=1.8))
+
+    bz2 = 7.5
+    ax_3d.add_patch(Polygon([iso(-0.5, -0.5, bz1), iso(bx+0.5, -0.5, bz1), iso(bx+0.5, -0.5, bz2), iso(-0.5, -0.5, bz2)], facecolor='#FFFFFF', edgecolor='#1E293B', lw=2.0))
+    ax_3d.add_patch(Polygon([iso(bx+0.5, -0.5, bz1), iso(bx+0.5, by, bz1), iso(bx+0.5, by, bz2), iso(bx+0.5, -0.5, bz2)], facecolor='#94A3B8', edgecolor='#1E293B', lw=2.0))
+
+    bz3 = 10.5
+    rx1, ry1, rx2 = 3.0, 2.0, 11.0
+    ax_3d.add_patch(Polygon([iso(rx1, ry1, bz2), iso(rx2, ry1, bz2), iso(rx2, ry1, bz3), iso(rx1, ry1, bz3)], facecolor='#FEF3C7', edgecolor='#B45309', lw=1.8))
+    ax_3d.add_patch(Polygon([iso(rx2, ry1, bz2), iso(rx2, by-1, bz2), iso(rx2, by-1, bz3), iso(rx2, ry1, bz3)], facecolor='#FDE68A', edgecolor='#B45309', lw=1.8))
+
+    tx, tw, tz_top = 5.5, 3.8, 11.2
+    p_tower = [iso(tx, -1.2, 0), iso(tx+tw, -1.2, 0), iso(tx+tw, -1.2, tz_top), iso(tx, -1.2, tz_top)]
+    ax_3d.add_patch(Polygon(p_tower, facecolor='#38BDF8', edgecolor='#0F172A', lw=2.2, alpha=0.88))
+    for zh in np.arange(1.2, tz_top, 1.2):
+        p_a = iso(tx, -1.2, zh)
+        p_b = iso(tx+tw, -1.2, zh)
+        ax_3d.plot([p_a[0], p_b[0]], [p_a[1], p_b[1]], color='#0F172A', lw=1.5)
+
+    p_door = [iso(tx+tw+0.6, -0.5, 0), iso(tx+tw+2.6, -0.5, 0), iso(tx+tw+2.6, -0.5, 3.2), iso(tx+tw+0.6, -0.5, 3.2)]
+    ax_3d.add_patch(Polygon(p_door, facecolor='#78350F', edgecolor='#451A03', lw=1.8))
+
+    ax_3d.set_aspect('equal')
+    ax_3d.axis('off')
+    ax_3d.set_title("المنظور المعماري الحجمي (3D Perspective) - فيلا G + 1 + Roof", fontsize=11, weight='bold')
+    st.pyplot(fig_3d)
+
+# ==============================================================================
+# TAB 5: المستشار الهندسي الذكي المتجاوب (AI Copilot)
+# ==============================================================================
+with tabs[4]:
+    st.subheader("🤖 المستشار الهندسي والبلدي الذكي (UAE AI Copilot)")
+    st.caption(f"مساعد استشاري مدعوم بنموذج Gemini 2.5 Pro لكود {emirate} ومواصفات قروض الإسكان ومخططات ARCAL.")
+
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_q = st.chat_input("اطرح استفسارك الهندسي، اشتراطات البلدية، أو فحص المخطط هنا...")
+    if user_q:
+        st.session_state.chat_history.append({"role": "user", "content": user_q})
+        with st.chat_message("user"):
+            st.markdown(user_q)
+
+        with st.chat_message("assistant"):
+            if active_api_key:
+                client = genai.Client(api_key=active_api_key)
+                system_instruction = (
+                    f"You are a Senior UAE Civil and Structural Consulting Engineer in {emirate}. "
+                    f"Plot specs: Width={plot_w}m, Length={plot_l}m, Area={plot_area}m2, Footprint={effective_ground}m2, Total BUA={total_bua}m2, Soil SBC={actual_sbc}kN/m2. "
+                    "Answer directly, technically, citing UAE municipal codes (ADIBC, Sharjah, DBC, ACI 318, DEWA/SEWA) and real consultant standards (ARCAL, Royal Dome BOQ). "
+                    "Be rigorous, objective, and analytical."
+                )
+                try:
+                    res = client.models.generate_content(
+                        model="gemini-2.5-pro",
+                        contents=[system_instruction, user_q]
+                    )
+                    reply = res.text
+                except Exception as e:
+                    reply = f"خطأ في الاتصال: {e}. يرجى التحقق من صحة المفتاح المسجل في Secrets."
+            else:
+                reply = "⚠️ يرجى تزويد المنظومة بمفتاح API Key لتفعيل الرد المباشر."
+
+            st.markdown(reply)
+            st.session_state.chat_history.append({"role": "assistant", "content": reply})
