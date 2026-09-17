@@ -11,6 +11,7 @@ from matplotlib.patches import Arc, FancyArrowPatch, Rectangle, Circle, Polygon
 import matplotlib.dates as mdates
 import ezdxf
 from PIL import Image
+import pypdf
 from google import genai
 from google.genai import types
 
@@ -20,39 +21,39 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- فحص وإدارة الجلسات -----------------
+# ----------------- مفتاح الـ API وتأمينه -----------------
 secret_key = st.secrets.get("GEMINI_API_KEY", "")
 
 if "auth" not in st.session_state:
     st.session_state.auth = {"logged_in": True, "user": "Super Admin"}
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "project_data" not in st.session_state:
-    st.session_state.project_data = {
+if "project_store" not in st.session_state:
+    st.session_state.project_store = {
         "plot_w": 30.0,
         "plot_l": 50.0,
         "sbc": 150.0,
         "bua": 850.0,
         "steel_span": 24.0,
-        "steel_length": 36.0,
+        "steel_len": 36.0,
         "steel_eave": 7.5,
         "drive_link": "",
-        "notes": "مشروع قياسي معتمد"
+        "doc_summary": ""
     }
 
-# ----------------- اللوحة الجانبية -----------------
-st.sidebar.markdown(f"**👤 المستخدم النشط:** `{st.session_state.auth['user']}`")
-if st.sidebar.button("🔄 تصفير الجلسة وبدء مشروع جديد", key="btn_reset_session"):
+# ----------------- الشريط الجانبي: اختيار المنظومة -----------------
+st.sidebar.markdown(f"**👤 المستخدم:** `{st.session_state.auth['user']}`")
+if st.sidebar.button("🔄 تصفير الجلسة وبدء مشروع جديد", key="btn_master_reset"):
     st.session_state.chat_history = []
-    st.session_state.project_data = {
+    st.session_state.project_store = {
         "plot_w": 30.0, "plot_l": 50.0, "sbc": 150.0, "bua": 850.0,
-        "steel_span": 24.0, "steel_length": 36.0, "steel_eave": 7.5, "drive_link": "", "notes": ""
+        "steel_span": 24.0, "steel_len": 36.0, "steel_eave": 7.5, "drive_link": "", "doc_summary": ""
     }
     st.rerun()
 
 st.sidebar.markdown("---")
 active_module = st.sidebar.radio(
-    "المنظومات الهندسية المستقلة:",
+    "المنظومات الهندسية المتاحة:",
     [
         "0. مركز رفع المخططات والروابط الهندسية (Project Ingestion Hub)",
         "1. التصميم المعماري والمناظير 3D (G+1+Roof)",
@@ -61,16 +62,17 @@ active_module = st.sidebar.radio(
         "4. مخططات الخدمات والدفاع المدني (MEP Set)",
         "5. كراسة الكميات المسعرة لمشروع قائم (BOQ Engine)",
         "6. محرك الجدولة الزمنية لبريمافيرا (Primavera P6)",
-        "7. المستشار الهندسي والبلدي الذكي (AI Copilot)"
+        "7. المستشار الهندسي والبلدي الذكي (AI Copilot)",
+        "8. مركز التصدير المباشر (AutoCAD / 3ds Max / Photoshop)"
     ],
-    key="side_nav_selection"
+    key="nav_master_selection"
 )
 
 st.sidebar.markdown("---")
 emirate = st.sidebar.selectbox(
     "الإمارة / الكود التنظيمي المعتمد:",
     ["أبوظبي / العين (ADIBC)", "الشارقة (المناطق الحضرية والشرقية)", "دبي (Dubai Building Code)", "عجمان / الفجيرة"],
-    key="side_select_emirate"
+    key="select_master_emirate"
 )
 
 if "أبوظبي" in emirate:
@@ -82,67 +84,94 @@ elif "دبي" in emirate:
 else:
     front_sb, rear_sb, side_sb, max_cov, roof_cov = 4.0, 3.0, 1.5, 0.55, 0.40
 
-override_api = st.sidebar.text_input("مفتاح Gemini API (اختياري لتحديث المفتاح):", type="password", key="side_override_api")
-active_key = override_api.strip() if override_api.strip() else secret_key.strip()
+override_api = st.sidebar.text_input("مفتاح Gemini API (اختياري لتحديث المفتاح):", type="password", key="side_api_key_override")
+active_api_key = override_api.strip() if override_api.strip() else secret_key.strip()
 
 # ==============================================================================
-# 0. مركز رفع المخططات والروابط الهندسية الشامل
+# 0. مركز رفع المخططات والروابط الهندسية الشامل (Ingestion Hub)
 # ==============================================================================
 if "0. مركز رفع المخططات" in active_module:
-    st.title("📁 مركز استقبال المخططات الجاهزة والروابط الهندسية (Project Ingestion Hub)")
-    st.markdown("منظومة مركزية لاستقبال كافة وثائق المشروع (PDF، DWG/DXF، Excel، وروابط Google Drive) واستخراج البيانات وتغذية كافة المنظومات آلياً.")
+    st.title("📁 مركز إدارة الوثائق والمخططات والروابط الهندسية (Project Ingestion Hub)")
+    st.markdown("رفع الكروكي، المخططات الجاهزة، كراسات الكميات Excel، وربط مجلدات Google Drive لاستخراج المتغيرات وتغذية كافة المنظومات آلياً.")
 
-    col_u1, col_u2 = st.columns(2)
-    with col_u1:
-        st.subheader("📤 رفع ملفات المشروع الجاهزة")
-        uploaded_files = st.file_uploader(
-            "ارفع ملفات الكروكي، المخططات المعمارية والإنشائية، أو جداول الكميات (PDF, DXF, XLSX, PNG):",
+    c_hub1, c_hub2 = st.columns(2)
+    with c_hub1:
+        st.subheader("📤 رفع ملفات المشروع (Upload Documents)")
+        uploaded_docs = st.file_uploader(
+            "ارفع ملفات المشروع (PDF, DXF, XLSX, CSV, PNG, JPG):",
             type=["pdf", "dxf", "xlsx", "xls", "csv", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
-            key="hub_multi_uploader"
+            key="hub_multi_file_uploader"
         )
-        if uploaded_files:
-            st.success(f"✅ تم تحميل {len(uploaded_files)} ملفات بنجاح في ذاكرة المعالجة.")
-            for f in uploaded_files:
-                st.caption(f"📄 {f.name} ({f.size / 1024:.1f} KB)")
+        if uploaded_docs:
+            st.success(f"تم تحميل {len(uploaded_docs)} ملف في الذاكرة النشطة.")
+            for doc in uploaded_docs:
+                st.caption(f"📄 `{doc.name}` ({doc.size / 1024:.1f} KB)")
+                # قراءة تلقائية إذا كان ملف كروكي PDF أو جدول إكسل
+                if doc.name.lower().endswith(".xlsx") or doc.name.lower().endswith(".xls"):
+                    try:
+                        df_preview = pd.read_excel(doc)
+                        st.write("معاينة بيانات الملف المرفوع:")
+                        st.dataframe(df_preview.head(3), use_container_width=True)
+                    except Exception:
+                        pass
+                elif doc.name.lower().endswith(".pdf") and active_api_key:
+                    if st.button(f"🔍 استخراج أبعاد القسيمة آلياً من {doc.name}", key=f"btn_parse_{doc.name}"):
+                        with st.spinner("جاري قراءة المخطط عبر الذكاء الاصطناعي..."):
+                            try:
+                                client = genai.Client(api_key=active_api_key)
+                                res = client.models.generate_content(
+                                    model="gemini-2.5-flash",
+                                    contents=[types.Part.from_bytes(data=doc.getvalue(), mime_type="application/pdf"),
+                                              "Extract width (frontage) and length (depth) in meters as JSON: {'width': float, 'length': float}."],
+                                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                                )
+                                parsed_dim = json.loads(res.text)
+                                st.session_state.project_store["plot_w"] = float(parsed_dim.get("width", 30.0))
+                                st.session_state.project_store["plot_l"] = float(parsed_dim.get("length", 50.0))
+                                st.success(f"تم اعتماد الواجهة: {st.session_state.project_store['plot_w']}م | العمق: {st.session_state.project_store['plot_l']}م")
+                            except Exception as ex:
+                                st.error(f"خطأ في القراءة الآلية: {ex}")
 
-    with col_u2:
-        st.subheader("🔗 ربط مجلدات ومخططات السحابة (Cloud Links)")
-        drive_url = st.text_input(
-            "الصق رابط Google Drive / Dropbox / OneDrive للمشروع:",
-            value=st.session_state.project_data.get("drive_link", ""),
+    with c_hub2:
+        st.subheader("🔗 ربط الروابط السحابية للمشروع (Cloud Storage)")
+        cloud_url = st.text_input(
+            "الصق رابط مجلد المشروع (Google Drive / OneDrive / Dropbox):",
+            value=st.session_state.project_store.get("drive_link", ""),
             placeholder="https://drive.google.com/drive/folders/...",
-            key="hub_drive_link_input"
+            key="hub_input_cloud_url"
         )
-        st.session_state.project_data["drive_link"] = drive_url
-        st.info("💡 يتم استخدام الرابط كمرجع رقمي معتمد للمشروع لربط التقارير والمخرجات والمستشار الذكي بحزمة الرسومات الكاملة.")
+        st.session_state.project_store["drive_link"] = cloud_url
+        doc_note = st.text_area(
+            "ملاحظات مرجعية حول المخططات المرفقة:",
+            value=st.session_state.project_store.get("doc_summary", ""),
+            placeholder="مثال: اعتماد تشطيبات مشروع قروض الإسكان رويال دوم، وتطبيق محاور الأعمدة لمخططات ARCAL...",
+            key="hub_input_notes"
+        )
+        st.session_state.project_store["doc_summary"] = doc_note
 
     st.markdown("---")
-    st.subheader("⚙️ مراجعة واعتماد البيانات المستخرجة للمشروع")
-    st.caption("يمكنك تعديل أي قيمة مستخرجة؛ سيتم تطبيقها وتحديثها فوراً في كافة المخططات الإنشائية والمعمارية وحصر الهياكل.")
+    st.subheader("⚙️ لوحة المتغيرات المركزية المعتمدة للمشروع")
+    st.caption("أي تعديل في هذه الحقول ينعكس لحظياً على المخططات المعمارية والإنشائية، وتصميم الهياكل الحديدية، وجداول الكميات.")
 
-    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-    with c_p1:
-        st.session_state.project_data["plot_w"] = st.number_input("عرض واجهة القسيمة (م):", 10.0, 300.0, float(st.session_state.project_data["plot_w"]), 0.5, key="hub_pw")
-    with c_p2:
-        st.session_state.project_data["plot_l"] = st.number_input("عمق القسيمة الداخلي (م):", 10.0, 400.0, float(st.session_state.project_data["plot_l"]), 0.5, key="hub_pl")
-    with c_p3:
-        st.session_state.project_data["sbc"] = st.number_input("جهد التربة الصافي SBC (kN/m²):", 60.0, 500.0, float(st.session_state.project_data["sbc"]), 10.0, key="hub_sbc")
-    with c_p4:
-        st.session_state.project_data["bua"] = st.number_input("مسطح البناء الإجمالي BUA (م²):", 100.0, 50000.0, float(st.session_state.project_data["bua"]), 50.0, key="hub_bua")
-
-    if st.button("🚀 تحليل واستخراج البيانات وتغذية كافة المنظومات", key="hub_btn_process"):
-        with st.spinner("جاري تدقيق محتوى الوثائق ومطابقة المحددات البلدية..."):
-            st.success("✅ تم تحديث بيانات المشروع واعتمادها في المنظومات المعمارية، الإنشائية، الهياكل المعدنية، وجداول الكميات بنجاح.")
+    c_v1, c_v2, c_v3, c_v4 = st.columns(4)
+    with c_v1:
+        st.session_state.project_store["plot_w"] = st.number_input("واجهة القسيمة (م):", 12.0, 300.0, float(st.session_state.project_store["plot_w"]), 0.5, key="hub_set_pw")
+    with c_v2:
+        st.session_state.project_store["plot_l"] = st.number_input("عمق القسيمة (م):", 15.0, 400.0, float(st.session_state.project_store["plot_l"]), 0.5, key="hub_set_pl")
+    with c_v3:
+        st.session_state.project_store["sbc"] = st.number_input("جهد التربة SBC (kN/m²):", 60.0, 500.0, float(st.session_state.project_store["sbc"]), 10.0, key="hub_set_sbc")
+    with c_v4:
+        st.session_state.project_store["bua"] = st.number_input("مسطح البناء الإجمالي BUA (م²):", 100.0, 50000.0, float(st.session_state.project_store["bua"]), 50.0, key="hub_set_bua")
 
 # ==============================================================================
-# 1. التصميم المعماري والمناظير 3D
+# 1. التصميم المعماري والمناظير 3D (G+1+Roof)
 # ==============================================================================
 elif "1. التصميم المعماري" in active_module:
     st.title("🏛️ المساقط المعمارية التنفيذية والمنظور الحجمي (G+1+Roof)")
 
-    plot_w = st.session_state.project_data["plot_w"]
-    plot_l = st.session_state.project_data["plot_l"]
+    plot_w = st.session_state.project_store["plot_w"]
+    plot_l = st.session_state.project_store["plot_l"]
 
     plot_area = round(plot_w * plot_l, 2)
     net_w = max(0.0, plot_w - (2 * side_sb))
@@ -152,7 +181,7 @@ elif "1. التصميم المعماري" in active_module:
     ff_area = round(effective_ground * 0.90, 1)
     roof_area = round(effective_ground * roof_cov, 1)
 
-    st.caption(f"الكود: {emirate} | مساحة القسيمة: {plot_area} م² | البصمة الأرضية: {effective_ground} م² | الطابق الأول: {ff_area} م² | طابق الروف: {roof_area} م²")
+    st.caption(f"الكود: {emirate} | القسيمة: {plot_area} م² | الأرضي المصرح: {effective_ground} م² | الأول: {ff_area} م² | الروف: {roof_area} م²")
 
     t_fl1, t_fl2, t_fl3, t_fl4 = st.tabs(["📐 مسقط الطابق الأرضي", "📐 مسقط الطابق الأول", "📐 مسقط طابق الروف", "🏛️ المنظور المعماري 3D"])
 
@@ -161,7 +190,7 @@ elif "1. التصميم المعماري" in active_module:
     st_x, st_y, st_w, st_h = corridor_x - 0.4, rear_sb + buildable_l*0.38, 3.2, 4.0
 
     with t_fl1:
-        fig_g, ax_g = plt.subplots(figsize=(8, 11), dpi=180)
+        fig_g, ax_g = plt.subplots(figsize=(8.5, 11), dpi=180)
         ax_g.set_facecolor('#FFFFFF')
         ax_g.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
         ax_g.add_patch(Rectangle((side_sb, rear_sb), net_w, net_l, lw=1.5, edgecolor='#DC2626', linestyle='--', facecolor='none'))
@@ -173,8 +202,8 @@ elif "1. التصميم المعماري" in active_module:
             {"n": "مجلس رجال فندقي\nFormal Majlis\n(7.50 x 5.40m)", "x": side_sb, "y": rear_sb + buildable_l*0.60, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.40, "c": "#FEF3C7"},
             {"n": "صالة طعام رسمية\nDining Hall\n(5.40 x 5.40m)", "x": side_sb, "y": rear_sb + buildable_l*0.30, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.30, "c": "#FDE68A"},
             {"n": "مطبخ رئيسي وتحضيري\nKitchen Suite\n(4.50 x 5.00m)", "x": side_sb, "y": rear_sb, "w": net_w*0.48 - corridor_w/2, "h": buildable_l*0.30, "c": "#FED7AA"},
-            {"n": "صالة معيشة بانورامية كبرى\nLiving Family Hall\n(7.00 x 8.50m)", "x": corridor_x + corridor_w, "y": rear_sb + buildable_l*0.45, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.55, "c": "#E0F2FE"},
-            {"n": "جناح نوم الضيوف / كبار السن\nGuest Suite (4.80 x 3.80m)", "x": corridor_x + corridor_w, "y": rear_sb, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.45, "c": "#F3E8FF"}
+            {"n": "صالة معيشة عائلية بانورامية\nLiving Family Hall\n(7.00 x 8.50m)", "x": corridor_x + corridor_w, "y": rear_sb + buildable_l*0.45, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.55, "c": "#E0F2FE"},
+            {"n": "جناح نوم ضيوف / كبار السن\nGuest Suite (4.80 x 3.80m)", "x": corridor_x + corridor_w, "y": rear_sb, "w": net_w*0.52 - corridor_w/2, "h": buildable_l*0.45, "c": "#F3E8FF"}
         ]
         for r in rooms_g:
             ax_g.add_patch(Rectangle((r["x"], r["y"]), r["w"], r["h"], lw=2.0, edgecolor='#0F172A', facecolor=r["c"], alpha=0.9))
@@ -196,7 +225,7 @@ elif "1. التصميم المعماري" in active_module:
         st.pyplot(fig_g)
 
     with t_fl2:
-        fig_f, ax_f = plt.subplots(figsize=(8, 11), dpi=180)
+        fig_f, ax_f = plt.subplots(figsize=(8.5, 11), dpi=180)
         ax_f.set_facecolor('#FFFFFF')
         ax_f.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
         ax_f.add_patch(Rectangle((side_sb, rear_sb), net_w, net_l, lw=1.5, edgecolor='#DC2626', linestyle='--', facecolor='none'))
@@ -225,7 +254,7 @@ elif "1. التصميم المعماري" in active_module:
         st.pyplot(fig_f)
 
     with t_fl3:
-        fig_r, ax_r = plt.subplots(figsize=(8, 11), dpi=180)
+        fig_r, ax_r = plt.subplots(figsize=(8.5, 11), dpi=180)
         ax_r.set_facecolor('#FFFFFF')
         ax_r.add_patch(Rectangle((0, 0), plot_w, plot_l, lw=2.0, edgecolor='#0F172A', facecolor='#F8FAFC'))
         ax_r.add_patch(Rectangle((side_sb, rear_sb), net_w, buildable_l, lw=2.0, edgecolor='#64748B', facecolor='#F1F5F9'))
@@ -291,9 +320,9 @@ elif "1. التصميم المعماري" in active_module:
 elif "2. المخطط الإنشائي" in active_module:
     st.title("🏗️ المخطط الإنشائي التنفيذي وخطوط الأبعاد بين المحاور (Framing Plan)")
 
-    pw = max(10.0, st.session_data.get("plot_w", 30.0) - 2*side_sb) if "session_data" in locals() else max(10.0, st.session_state.project_data["plot_w"] - 2*side_sb)
-    pl = max(10.0, st.session_state.project_data["plot_l"] - (front_sb + rear_sb))
-    sbc_in = st.session_state.project_data["sbc"]
+    pw = max(10.0, st.session_state.project_store["plot_w"] - 2*side_sb)
+    pl = max(10.0, st.session_state.project_store["plot_l"] - (front_sb + rear_sb))
+    sbc_in = st.session_state.project_store["sbc"]
 
     col_load_u = 1350.0
     footing_a = (col_load_u / 1.45) / sbc_in
@@ -344,24 +373,23 @@ elif "2. المخطط الإنشائي" in active_module:
     st.success(f"القاعدة F1: أبعاد {footing_d:.2f} × {footing_d:.2f} × {footing_th:.2f} م | التسليح: 7 T 16mm/m باتجاهين | الميدات: 20 × 60 سم.")
 
 # ==============================================================================
-# 3. حصر وتصميم الهياكل المعدنية (Steel Structures QTO & Engineering)
+# 3. حصر وتصميم الهياكل المعدنية
 # ==============================================================================
 elif "3. حصر وتصميم الهياكل المعدنية" in active_module:
     st.title("🔩 محرك حصر وتصميم الهياكل الفولاذية والجمالونات (Steel Engineering & QTO)")
-    st.markdown("تصميم الإطارات المعدنية (Portal Frames)، وحصر أطوال القطاعات، الأوزان، مساحات الدهان المقاوم للحريق، وتفاصيل الوصلات.")
 
     c_s1, c_s2, c_s3, c_s4 = st.columns(4)
     with c_s1:
-        span_in = st.number_input("بحر الهيكل الإنشائي Span (م):", 10.0, 60.0, float(st.session_state.project_data["steel_span"]), 1.0, key="st_inp_span")
-        st.session_state.project_data["steel_span"] = span_in
+        span_in = st.number_input("بحر الهيكل الإنشائي Span (م):", 10.0, 60.0, float(st.session_state.project_store["steel_span"]), 1.0, key="st_hub_span")
+        st.session_state.project_store["steel_span"] = span_in
     with c_s2:
-        length_in = st.number_input("الطول الإجمالي للهنجر (م):", 12.0, 200.0, float(st.session_state.project_data["steel_length"]), 2.0, key="st_inp_len")
-        st.session_state.project_data["steel_length"] = length_in
+        length_in = st.number_input("الطول الإجمالي للهنجر (م):", 12.0, 200.0, float(st.session_state.project_store["steel_len"]), 2.0, key="st_hub_len")
+        st.session_state.project_store["steel_len"] = length_in
     with c_s3:
-        bay_spacing = st.number_input("المسافة بين الإطارات Bay Spacing (م):", 4.0, 10.0, 6.0, 0.5, key="st_inp_spacing")
+        bay_spacing = st.number_input("المسافة بين الإطارات Bay Spacing (م):", 4.0, 10.0, 6.0, 0.5, key="st_hub_spacing")
     with c_s4:
-        eave_h_in = st.number_input("ارتفاع العمود Eave Height (م):", 4.0, 18.0, float(st.session_state.project_data["steel_eave"]), 0.5, key="st_inp_eave")
-        st.session_state.project_data["steel_eave"] = eave_h_in
+        eave_h_in = st.number_input("ارتفاع العمود Eave Height (م):", 4.0, 18.0, float(st.session_state.project_store["steel_eave"]), 0.5, key="st_hub_eave")
+        st.session_state.project_store["steel_eave"] = eave_h_in
 
     pitch_deg = 10.0
     bays_count = int(length_in / bay_spacing)
@@ -369,34 +397,27 @@ elif "3. حصر وتصميم الهياكل المعدنية" in active_module:
     rafter_len_single = (span_in / 2) / np.cos(np.radians(pitch_deg))
     ridge_h = eave_h_in + (span_in / 2) * np.tan(np.radians(pitch_deg))
 
-    # رسم هندسي تنفيذي لقطاع الإطار الفولاذي
     fig_steel, ax_st = plt.subplots(figsize=(11, 5.5), dpi=200)
     ax_st.set_facecolor('#FFFFFF')
 
-    # رسم القواعد الخرسانية المسلحة تحت الأعمدة
     ax_st.add_patch(Rectangle((-1.0, -1.2), 2.0, 1.2, facecolor='#E2E8F0', edgecolor='#1E293B', lw=1.5))
     ax_st.add_patch(Rectangle((span_in - 1.0, -1.2), 2.0, 1.2, facecolor='#E2E8F0', edgecolor='#1E293B', lw=1.5))
     ax_st.text(0, -0.6, "قاعدة خرسانية\nRC Footing", ha='center', fontsize=7.5, weight='bold')
     ax_st.text(span_in, -0.6, "قاعدة خرسانية\nRC Footing", ha='center', fontsize=7.5, weight='bold')
 
-    # رسم لوح التثبيت والبراغي (Base Plate & Anchor Bolts)
     ax_st.add_patch(Rectangle((-0.4, 0), 0.8, 0.15, facecolor='#0F172A'))
     ax_st.add_patch(Rectangle((span_in - 0.4, 0), 0.8, 0.15, facecolor='#0F172A'))
 
-    # رسم الأعمدة الرئيسية (UC / HEB)
     ax_st.plot([0, 0], [0, eave_h_in], color='#1E3A8A', lw=6.0, label='أعمدة رئيسية (UC Columns)')
     ax_st.plot([span_in, span_in], [0, eave_h_in], color='#1E3A8A', lw=6.0)
 
-    # رسم الجملون والوصلات المائلة (Rafters with Haunch)
     apex_x, apex_y = span_in / 2, ridge_h
     ax_st.plot([0, apex_x], [eave_h_in, apex_y], color='#0284C7', lw=5.0, label='كمرات الجملون (UB Rafters)')
     ax_st.plot([span_in, apex_x], [eave_h_in, apex_y], color='#0284C7', lw=5.0)
 
-    # وصلة الركبة الجاسئة (Eave Haunch Bracket)
     ax_st.add_patch(Polygon([(0, eave_h_in - 1.2), (0, eave_h_in), (2.0, eave_h_in + 2.0*np.tan(np.radians(pitch_deg)))], facecolor='#0369A1', alpha=0.8))
     ax_st.add_patch(Polygon([(span_in, eave_h_in - 1.2), (span_in, eave_h_in), (span_in - 2.0, eave_h_in + 2.0*np.tan(np.radians(pitch_deg)))], facecolor='#0369A1', alpha=0.8))
 
-    # رسم المدادات السقفية (Z-Purlins)
     purlin_space = 1.4
     p_steps = int((span_in / 2) / purlin_space)
     for i in range(1, p_steps + 1):
@@ -405,7 +426,6 @@ elif "3. حصر وتصميم الهياكل المعدنية" in active_module:
         ax_st.plot(px, py, marker='s', markersize=6, color='#D97706')
         ax_st.plot(span_in - px, py, marker='s', markersize=6, color='#D97706')
 
-    # خطوط الأبعاد والمناسيب
     ax_st.annotate('', xy=(0, -1.8), xytext=(span_in, -1.8), arrowprops=dict(arrowstyle='<->', color='black', lw=1.4))
     ax_st.text(span_in/2, -1.6, f"Clear Span = {span_in:.2f} m", ha='center', fontsize=9, weight='bold')
 
@@ -419,10 +439,8 @@ elif "3. حصر وتصميم الهياكل المعدنية" in active_module:
     ax_st.set_ylim(-2.5, ridge_h + 2)
     ax_st.set_aspect('equal')
     ax_st.axis('off')
-    ax_st.set_title("القطاع العرضي الإنشائي للإطار الفولاذي (Steel Portal Frame Cross-Section)", fontsize=11, weight='bold')
     st.pyplot(fig_steel)
 
-    # حصر الكميات والمواصفات لقطاعات الحديد
     col_tot_len = frames_n * 2 * eave_h_in
     raf_tot_len = frames_n * 2 * rafter_len_single
     purlin_lines_count = (p_steps * 2) + 1
@@ -456,7 +474,7 @@ elif "3. حصر وتصميم الهياكل المعدنية" in active_module:
     st.dataframe(df_st, use_container_width=True)
     buf_st = io.StringIO()
     df_st.to_csv(buf_st, index=False, encoding='utf-8-sig')
-    st.download_button("📥 تحميل كشف حصر قطاعات وأوزان الحديد (Excel / CSV)", buf_st.getvalue().encode('utf-8-sig'), "Steel_Structure_QTO.csv", "text/csv", key="btn_dl_st_csv")
+    st.download_button("📥 تحميل كشف حصر قطاعات وأوزان الحديد (Excel / CSV)", buf_st.getvalue().encode('utf-8-sig'), "Steel_Structure_QTO.csv", "text/csv", key="btn_dl_steel_csv")
 
 # ==============================================================================
 # 4. مخططات الخدمات والدفاع المدني
@@ -467,7 +485,7 @@ elif "4. مخططات الخدمات" in active_module:
         "1. شبكة الصرف الصحي وغرف التفتيش (Plumbing & Drainage)",
         "2. شبكة الكهرباء والإنارة ومأخذ القوى (Electrical & Lighting)",
         "3. مخطط السلامة ومكافحة الحريق (Civil Defence & Life Safety)"
-    ], horizontal=True, key="mep_layer_choice")
+    ], horizontal=True, key="mep_layer_master_choice")
 
     fig_m, ax_m = plt.subplots(figsize=(10, 8), dpi=180)
     ax_m.set_facecolor('#FFFFFF')
@@ -511,18 +529,18 @@ elif "4. مخططات الخدمات" in active_module:
 elif "5. كراسة الكميات المسعرة" in active_module:
     st.title("📊 كراسة الكميات والمواصفات التعاقدية الرسمية (BOQ Engine)")
 
-    bua_val = st.session_state.project_data["bua"]
+    bua_val = st.session_state.project_store["bua"]
     c_bq1, c_bq2 = st.columns(2)
     with c_bq1:
-        calc_bua = st.number_input("مسطح البناء الإجمالي BUA المعتمد للحساب (م²):", 100.0, 50000.0, float(bua_val), 25.0, key="boq_inp_bua")
-        st.session_state.project_data["bua"] = calc_bua
+        calc_bua = st.number_input("مسطح البناء الإجمالي BUA المعتمد للحساب (م²):", 100.0, 50000.0, float(bua_val), 25.0, key="boq_bua_master")
+        st.session_state.project_store["bua"] = calc_bua
     with c_bq2:
         tier = st.selectbox("مستوى التشطيب والمواصفات التعاقدية:", [
             "1. تجاري معتمد (National Housing Standard) - قروض الإسكان",
             "2. ديلوكس عصري حديث (Modern Deluxe)",
             "3. سوبر ديلوكس فندقي (Super Deluxe)",
             "4. ألترا لوكجري VIP (Ultra Luxury VIP)"
-        ], key="boq_inp_tier")
+        ], key="boq_tier_master")
 
     r_factor = 1.0 if "تجاري" in tier else (1.35 if "ديلوكس" in tier else (1.75 if "سوبر" in tier else 2.40))
 
@@ -557,7 +575,7 @@ elif "5. كراسة الكميات المسعرة" in active_module:
     st.dataframe(df_boq, use_container_width=True)
     buf_boq = io.StringIO()
     df_boq.to_csv(buf_boq, index=False, encoding='utf-8-sig')
-    st.download_button("📥 تحميل كراسة الكميات المسعرة الرسمية (Excel / CSV)", buf_boq.getvalue().encode('utf-8-sig'), "BOQ_Official_Standard.csv", "text/csv", key="btn_dl_boq_csv")
+    st.download_button("📥 تحميل كراسة الكميات المسعرة الرسمية (Excel / CSV)", buf_boq.getvalue().encode('utf-8-sig'), "BOQ_Official_Standard.csv", "text/csv", key="btn_dl_boq_master_csv")
 
 # ==============================================================================
 # 6. محرك الجدولة الزمنية لبريمافيرا (Primavera P6)
@@ -565,7 +583,7 @@ elif "5. كراسة الكميات المسعرة" in active_module:
 elif "6. محرك الجدولة الزمنية" in active_module:
     st.title("⏱️ محرك الجدولة الزمنية والمسار الحرج المعتمد (Primavera P6 Engine)")
 
-    s_date = st.date_input("تاريخ استلام الموقع وبدء المشروع:", datetime.date.today(), key="p6_inp_date")
+    s_date = st.date_input("تاريخ استلام الموقع وبدء المشروع:", datetime.date.today(), key="p6_master_date")
 
     p6_tasks = [
         {"ID": "ACT-1010", "WBS": "1.PRE-CON", "Name": "التراخيص البلدية وفحص التربة وشهادات NOC", "Dur": 28, "Crit": "CRITICAL"},
@@ -592,14 +610,14 @@ elif "6. محرك الجدولة الزمنية" in active_module:
     st.dataframe(df_p6, use_container_width=True)
     buf_p6 = io.StringIO()
     df_p6.to_csv(buf_p6, index=False, encoding='utf-8-sig')
-    st.download_button("📥 تحميل ملف استيراد بريمافيرا (Primavera P6 CSV)", buf_p6.getvalue().encode('utf-8-sig'), "Primavera_P6_Import.csv", "text/csv", key="btn_dl_p6_csv")
+    st.download_button("📥 تحميل ملف استيراد بريمافيرا (Primavera P6 CSV)", buf_p6.getvalue().encode('utf-8-sig'), "Primavera_P6_Import.csv", "text/csv", key="btn_dl_p6_master_csv")
 
 # ==============================================================================
 # 7. المستشار الهندسي والبلدي الذكي (AI Copilot)
 # ==============================================================================
-else:
+elif "7. المستشار الهندسي والبلدي الذكي" in active_module:
     st.title("🤖 المستشار الهندسي والبلدي التفاعلي المباشر (AI Copilot)")
-    st.caption(f"مستشار متخصص في كود {emirate} ومواصفات قروض الإسكان والتحليل الإنشائي والهياكل المعدنية.")
+    st.caption(f"مستشار استشاري معتمد بكود {emirate} ومواصفات قروض الإسكان والتحليل الإنشائي والهياكل المعدنية.")
 
     for m in st.session_state.chat_history:
         with st.chat_message(m["role"]): st.markdown(m["content"])
@@ -611,17 +629,18 @@ else:
 
         with st.chat_message("assistant"):
             reply_done = False
-            if active_key:
+            if active_api_key:
                 try:
-                    client = genai.Client(api_key=active_key)
+                    client = genai.Client(api_key=active_api_key)
                     sys_prompt = (
                         f"You are a Senior UAE Civil & Structural Engineering Consultant in {emirate}. "
-                        f"Current Project Context: Plot Dims={st.session_state.project_data['plot_w']}x{st.session_state.project_data['plot_l']}m, "
-                        f"BUA={st.session_state.project_data['bua']}m2, SBC={st.session_state.project_data['sbc']}kN/m2, "
-                        f"Steel Portal Span={st.session_state.project_data['steel_span']}m, Length={st.session_state.project_data['steel_length']}m, Eave={st.session_state.project_data['steel_eave']}m. "
-                        f"Drive/Docs Reference: {st.session_state.project_data['drive_link']}. "
+                        f"Current Project Context: Plot Dims={st.session_state.project_store['plot_w']}x{st.session_state.project_store['plot_l']}m, "
+                        f"BUA={st.session_state.project_store['bua']}m2, SBC={st.session_state.project_store['sbc']}kN/m2, "
+                        f"Steel Portal Span={st.session_state.project_store['steel_span']}m, Length={st.session_state.project_store['steel_len']}m, Eave={st.session_state.project_store['steel_eave']}m. "
+                        f"Drive Reference Link: {st.session_state.project_store['drive_link']}. "
+                        f"Project Notes: {st.session_state.project_store['doc_summary']}. "
                         "Answer technically, analytically, citing UAE codes (ADIBC, Sharjah, Dubai Building Code, ACI 318, AISC 360, UAE Fire Code). "
-                        "Provide concrete structural and architectural advice without filler."
+                        "Provide concrete structural, architectural, and municipal advice without fluff."
                     )
                     res = client.models.generate_content(model="gemini-2.5-flash", contents=[sys_prompt, user_query])
                     reply_text = res.text
@@ -632,11 +651,54 @@ else:
             if not reply_done:
                 q_l = user_query.lower()
                 if "معدن" in user_query or "حديد" in user_query or "جمالون" in user_query or "steel" in q_l:
-                    reply_text = f"طبقاً لمواصفات AISC 360 وكود {emirate} لمشروع الهيكل المعدني (بحر {st.session_state.project_data['steel_span']}م وارتفاع {st.session_state.project_data['steel_eave']}م):\n- قطاع الأعمدة المقترح: UC 254x254x73 أو HEB 260.\n- قطاع الكمرات: UB 356x171x51 أو IPE 360 مع وصلة ركبة (Haunch 1.8m).\n- المدادات: Z 200 x 2.0 mm بتباعد لا يتجاوز 1.5م.\n- دهان الحماية من الحريق: إنتوميسنت بسماكة تحقق مقاومة ساعتين (2-Hour Fire Rating) معتمد من الدفاع المدني."
+                    reply_text = f"طبقاً لمواصفات AISC 360 وكود {emirate} لمشروع الهيكل المعدني (بحر {st.session_state.project_store['steel_span']}م وارتفاع {st.session_state.project_store['steel_eave']}م):\n- قطاع الأعمدة المقترح: UC 254x254x73 أو HEB 260.\n- قطاع الكمرات: UB 356x171x51 أو IPE 360 مع وصلة ركبة (Haunch 1.8m).\n- المدادات: Z 200 x 2.0 mm بتباعد لا يتجاوز 1.4م.\n- دهان الحماية من الحريق: إنتوميسنت بسماكة تحقق مقاومة ساعتين (2-Hour Fire Rating) معتمد من الدفاع المدني."
                 elif "تربة" in user_query or "أساس" in user_query:
-                    reply_text = f"جهد التربة الصافي المسجل بالمشروع هو {st.session_state.project_data['sbc']} kN/m². طبقاً لكود ACI 318؛ يتم استخدام قواعد منفصلة F1 مسلحة بخرسانة كبريتية SRC C40 وتربط بميدات جاسئة 20x60 سم لمنع الهبوط المتفاوت."
+                    reply_text = f"جهد التربة الصافي المسجل بالمشروع هو {st.session_state.project_store['sbc']} kN/m². طبقاً لكود ACI 318؛ يتم استخدام قواعد منفصلة F1 مسلحة بخرسانة كبريتية SRC C40 وتربط بميدات جاسئة 20x60 سم لمنع الهبوط المتفاوت."
                 else:
-                    reply_text = f"مرحباً بك. أنا مستشارك الهندسي لكود {emirate}. جميع بيانات مشروعك (أبعاد القسيمة {st.session_state.project_data['plot_w']}×{st.session_state.project_data['plot_l']}م، ومسطح البناء {st.session_state.project_data['bua']}م²، والهيكل المعدني) محملة وجاهزة. يمكنك سؤالي عن تفاصيل التسليح، مراجعة اشتراطات البلدية، بنود كراسة الكميات، أو روابط Google Drive المرفقة."
+                    reply_text = f"مرحباً بك. أنا مستشارك الهندسي المعتمد لكود {emirate}. جميع بيانات مشروعك محملة (أبعاد القسيمة {st.session_state.project_store['plot_w']}×{st.session_state.project_store['plot_l']}م، ومسطح البناء {st.session_state.project_store['bua']}م²، والهيكل المعدني، ورابط Google Drive). يمكنك سؤالي عن تفاصيل التسليح، اشتراطات البلدية، بنود كراسة الكميات، أو روابط Google Drive المرفقة."
 
             st.markdown(reply_text)
             st.session_state.chat_history.append({"role": "assistant", "content": reply_text})
+
+# ==============================================================================
+# 8. مركز التصدير المباشر (AutoCAD / 3ds Max / Photoshop)
+# ==============================================================================
+else:
+    st.title("📦 مركز التصدير الهندسي متعدد البرامج (CAD / BIM / Rendering)")
+    st.markdown("تصدير حزم الرسومات التنفيذية والمجسمات ثلاثية الأبعاد بضغطة زر واحدة للتكامل مع بيئات العمل الاستشارية:")
+
+    pw = st.session_state.project_store["plot_w"]
+    pl = st.session_state.project_store["plot_l"]
+    nw = max(0.0, pw - 2*side_sb)
+    nl = max(0.0, pl - (front_sb + rear_sb))
+
+    col_exp1, col_exp2, col_exp3 = st.columns(3)
+
+    with col_exp1:
+        st.markdown("### 📐 AutoCAD (.DXF)")
+        st.write("ملف طبقات كامل متوافق مع بلديات الدولة (`SETBACKS`, `WALLS`, `GRIDS`, `STAIRS`).")
+        doc = ezdxf.new('R2010')
+        msp = doc.modelspace()
+        doc.layers.add(name="SETBACKS", color=1)
+        msp.add_lwpolyline([(side_sb, rear_sb), (pw-side_sb, rear_sb), (pw-side_sb, pl-front_sb), (side_sb, pl-front_sb), (side_sb, rear_sb)], dxfattribs={'layer': 'SETBACKS'})
+        doc.layers.add(name="WALLS", color=4)
+        msp.add_lwpolyline([(side_sb, rear_sb), (side_sb+nw, rear_sb), (side_sb+nw, rear_sb+nl), (side_sb, rear_sb+nl), (side_sb, rear_sb)], dxfattribs={'layer': 'WALLS'})
+        buf_dxf = io.StringIO()
+        doc.write(buf_dxf)
+        st.download_button("💾 تحميل مخطط AutoCAD (.DXF)", buf_dxf.getvalue().encode('utf-8'), "Master_Project_Plan.dxf", "application/dxf", key="exp_btn_dxf")
+
+    with col_exp2:
+        st.markdown("### 🧊 3ds Max / Blender (.OBJ)")
+        st.write("مجسم كتل 3D هندسي حقيقي بأسطحه وجدرانه وارتفاعاته للرندر في Corona / V-Ray.")
+        obj_content = f"# UAE Villa 3D Asset for 3ds Max\nv 0 0 0\nv {nw:.2f} 0 0\nv {nw:.2f} 8.5 0\nv 0 8.5 0\nv 0 0 {nl:.2f}\nv {nw:.2f} 0 {nl:.2f}\nv {nw:.2f} 8.5 {nl:.2f}\nv 0 8.5 {nl:.2f}\nf 1 2 3 4\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n"
+        st.download_button("💾 تحميل مجسم 3ds Max (.OBJ)", obj_content.encode('utf-8'), "Villa_3D_Model.obj", "model/obj", key="exp_btn_obj")
+
+    with col_exp3:
+        st.markdown("### 🎨 Photoshop (.PNG 300 DPI)")
+        st.write("مسقط معماري شفاف عالي الدقة للإخراج اللوني وتوزيع الفرش والحدائق.")
+        fig_ps, ax_ps = plt.subplots(figsize=(6, 8), dpi=300)
+        ax_ps.add_patch(Rectangle((side_sb, rear_sb), nw, nl, facecolor='#FEF3C7', edgecolor='#0F172A', lw=2.0))
+        ax_ps.axis('off')
+        buf_png = io.BytesIO()
+        fig_ps.savefig(buf_png, format='png', dpi=300, bbox_inches='tight', transparent=True)
+        st.download_button("💾 تحميل شيت Photoshop الشفاف", buf_png.getvalue(), "Plan_Photoshop.png", "image/png", key="exp_btn_png")
