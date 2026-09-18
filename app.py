@@ -474,3 +474,183 @@ else:
     st.title("🏛️ مسار التصميم المتكامل للمشاريع الجديدة (Greenfield Architecture)")
     st.caption("النواة المركزية متصلة وجاهزة لتفعيل محرك الرسم المعماري التنفيذي بالجدران المزدوجة والأبعاد الثلاثية في الخطوة القادمة.")
     st.info("💡 سيتم بناء هذا المسار بالكامل فور التأكد من اكتمال واختبار المسار الأول.")
+st.markdown("---")
+        st.markdown("#### 📷 سجل الفحص الميداني والتحليل البصري بالذكاء الاصطناعي (AI Vision Inspector)")
+        st.caption("يتم تحليل كل صورة تلقائياً عبر Gemini Vision لتحديد طبيعة العنصر، نسبة الإنجاز الواقعية، والعيوب إن وجدت:")
+
+        up_site_photos = st.file_uploader(
+            "اسحب وأفلت صور الموقع هنا (JPG, PNG, WEBP):",
+            type=["jpg", "png", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key="rec_site_photos_gallery"
+        )
+
+        # تهيئة ذاكرة تخزين تحليلات الصور لمنع إعادة استهلاك الـ API
+        if "vision_cache" not in st.session_state:
+            st.session_state.vision_cache = {}
+
+        if up_site_photos:
+            st.info(f"تم استقبال {len(up_site_photos)} صورة. جاري مطابقة وتحليل المحتوى بصرياً...")
+
+            # زر تشغيل الفحص الذكي للصور
+            col_btn1, col_btn2 = st.columns([1, 3])
+            with col_btn1:
+                run_ai_scan = st.button("🔍 تحليل وتوصيف كافة الصور بالذكاء الاصطناعي", key="btn_trigger_ai_vision")
+
+            if run_ai_scan and active_gemini_key:
+                client = genai.Client(api_key=active_gemini_key)
+                progress_bar = st.progress(0)
+                
+                for idx, p_file in enumerate(up_site_photos):
+                    file_bytes = p_file.getvalue()
+                    m_type = p_file.type if p_file.type else "image/jpeg"
+                    
+                    vision_prompt = """
+                    You are a Senior UAE Civil & Structural Project Inspection Engineer.
+                    Analyze this site inspection image thoroughly and return STRICT JSON with this schema:
+                    {
+                        "element_category": "One of: قواعد وميدات مسلحة / أعمدة وهيكل خرساني / أسقف وكمرات / هيكل معدني جملون / ملاعب ومنشآت رياضية (بادل/تنس) / حلبات ومرافق خيل / أسوار وبوابات / مخطط هندسي وكروكي / أعمال ترابية وتسوية",
+                        "actual_description": "وصف هندسي واقعي ودقيق لما يظهر بالصورة في سطر واحد باللغة العربية",
+                        "progress_percentage": integer between 0 and 100 representing physical completion,
+                        "defect_status": "One of: مكتمل وسليم ومطابق / أعمال قيد التنفيذ / صدأ أشاير يتطلب معالجة / تعشيش خرساني / تأثر بالرطوبة وتوقف أعمال / عدم اكتمال دهان الحريق / أرضيات وأسوار بحالة جيدة",
+                        "estimated_cost": estimated cost in AED to complete or rectify (0 if 100% complete)
+                    }
+                    Output strictly JSON without markdown wrappers.
+                    """
+                    
+                    try:
+                        res = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=[
+                                types.Part.from_bytes(data=file_bytes, mime_type=m_type),
+                                vision_prompt
+                            ],
+                            config=types.GenerateContentConfig(response_mime_type="application/json")
+                        )
+                        st.session_state.vision_cache[p_file.name] = json.loads(res.text)
+                    except Exception as e:
+                        st.session_state.vision_cache[p_file.name] = {
+                            "element_category": "تحليل يدوي مطلوب",
+                            "actual_description": f"تعذر التحليل التلقائي: {str(e)[:50]}",
+                            "progress_percentage": 50,
+                            "defect_status": "تحت المراجعة",
+                            "estimated_cost": 0.0
+                        }
+                    progress_bar.progress((idx + 1) / len(up_site_photos))
+                
+                st.success("✅ اكتمل الفحص البصري وتوصيف الصور بالكامل.")
+
+            # استعراض الصور في شبكة من 3 أعمدة بناءً على التحليل الواقعي
+            p_cols = st.columns(3)
+            current_findings = []
+
+            for idx, p_file in enumerate(up_site_photos):
+                t_col = p_cols[idx % 3]
+                
+                # جلب البيانات من الـ Cache أو تعيين قيم افتراضية منطقية أولية
+                cached_data = st.session_state.vision_cache.get(p_file.name, {
+                    "element_category": "ملاعب ومنشآت رياضية (بادل/تنس)" if "padel" in p_file.name.lower() else "منشأة موقعية",
+                    "actual_description": "بانتظار تشغيل التحليل الذكي للصور أعلاه",
+                    "progress_percentage": 100 if "padel" in p_file.name.lower() else 50,
+                    "defect_status": "مكتمل وسليم ومطابق",
+                    "estimated_cost": 0.0
+                })
+
+                with t_col:
+                    p_img = Image.open(p_file)
+                    st.image(p_img, caption=f"صورة #{idx+1}: {p_file.name}", use_container_width=True)
+                    
+                    with st.expander(f"📋 توصيف الصورة #{idx+1}", expanded=True):
+                        # عرض الوصف المستخرج من الذكاء الاصطناعي
+                        st.markdown(f"**الوصف الفعلي:** `{cached_data['actual_description']}`")
+                        
+                        el_name = st.selectbox(
+                            "التصنيف الهندسي:",
+                            [
+                                "ملاعب ومنشآت رياضية (بادل/تنس)",
+                                "حلبات ومرافق خيل (Equestrian)",
+                                "مخطط هندسي وكروكي",
+                                "قواعد وميدات مسلحة",
+                                "أعمدة وهيكل خرساني",
+                                "سقف خرساني وكمرات",
+                                "هيكل معدني جملون (Steel)",
+                                "مدادات سقف Z-Purlins",
+                                "أسوار وبوابات خارجية",
+                                "أعمال ترابية وتسوية"
+                            ],
+                            index=[
+                                "ملاعب ومنشآت رياضية (بادل/تنس)",
+                                "حلبات ومرافق خيل (Equestrian)",
+                                "مخطط هندسي وكروكي",
+                                "قواعد وميدات مسلحة",
+                                "أعمدة وهيكل خرساني",
+                                "سقف خرساني وكمرات",
+                                "هيكل معدني جملون (Steel)",
+                                "مدادات سقف Z-Purlins",
+                                "أسوار وبوابات خارجية",
+                                "أعمال ترابية وتسوية"
+                            ].index(cached_data["element_category"]) if cached_data["element_category"] in [
+                                "ملاعب ومنشآت رياضية (بادل/تنس)", "حلبات ومرافق خيل (Equestrian)", "مخطط هندسي وكروكي",
+                                "قواعد وميدات مسلحة", "أعمدة وهيكل خرساني", "سقف خرساني وكمرات",
+                                "هيكل معدني جملون (Steel)", "مدادات سقف Z-Purlins", "أسوار وبوابات خارجية", "أعمال ترابية وتسوية"
+                            ] else 0,
+                            key=f"rec_el_type_{idx}"
+                        )
+                        
+                        el_prog = st.slider(
+                            "نسبة الإنجاز الميداني (%):",
+                            0, 100, int(cached_data["progress_percentage"]),
+                            key=f"rec_el_prog_{idx}"
+                        )
+                        
+                        el_defect = st.selectbox(
+                            "الملاحظات الفنية:",
+                            [
+                                "مكتمل وسليم ومطابق",
+                                "أعمال قيد التنفيذ",
+                                "صدأ أشاير يتطلب سفع رملي وبرايمر",
+                                "تعشيش خرساني يتطلب حقن إيبوكسي",
+                                "تأثر بالرطوبة وتوقف أعمال",
+                                "عدم اكتمال دهان الحريق (ساعتين)",
+                                "أرضيات وأسوار بحالة جيدة",
+                                "مخطط معتمد يحتاج تدقيق"
+                            ],
+                            index=0 if "سليم" in cached_data["defect_status"] or "مكتمل" in cached_data["defect_status"] else 1,
+                            key=f"rec_el_def_{idx}"
+                        )
+                        
+                        el_cost = st.number_input(
+                            "تكلفة المعالجة / الإكمال (AED):",
+                            0.0, 500000.0, float(cached_data["estimated_cost"]), 500.0,
+                            key=f"rec_el_cost_{idx}"
+                        )
+
+                        current_findings.append({
+                            "رقم": idx + 1,
+                            "اسم الملف": p_file.name,
+                            "العنصر": el_name,
+                            "الوصف الميداني": cached_data["actual_description"],
+                            "نسبة الإنجاز": f"{el_prog}%",
+                            "الملاحظات الفنية": el_defect,
+                            "تكلفة المعالجة (AED)": el_cost
+                        })
+
+            pt["recovery_data"]["inspection_findings"] = current_findings
+
+            st.markdown("---")
+            st.subheader("📊 جدول حصر العيوب والأعمال المستخلصة بعد التحليل البصري الواقعي")
+            df_findings = pd.DataFrame(current_findings)
+            st.dataframe(df_findings, use_container_width=True)
+
+            tot_rect_cost = df_findings["تكلفة المعالجة (AED)"].sum()
+            st.metric("إجمالي ميزانية المعالجة واستكمال الأعمال المتبقية", f"{tot_rect_cost:,.0f} درهم إماراتي")
+
+            buf_csv = io.StringIO()
+            df_findings.to_csv(buf_csv, index=False, encoding='utf-8-sig')
+            st.download_button(
+                "📥 تحميل كشف تدقيق الصور الميدانية المعتمد (CSV / Excel)",
+                data=buf_csv.getvalue().encode('utf-8-sig'),
+                file_name="AI_Site_Inspection_Log.csv",
+                mime="text/csv",
+                key="btn_dl_defects_log"
+            )
