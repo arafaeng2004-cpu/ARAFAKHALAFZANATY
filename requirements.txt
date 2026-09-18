@@ -1,9 +1,8 @@
-streamlit
-google-genai
-pillow
-pandas
-matplotlib
-ezdxf
-pypdf
-streamlit
-numpy
+streamlit>=1.35.0
+pandas>=2.2.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+Pillow>=10.2.0
+ezdxf>=1.2.0
+pypdf>=4.0.0
+google-genai>=0.1.0
